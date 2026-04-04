@@ -1,0 +1,31 @@
+# Credenciais e configurações locais
+include/config.h
+secrets.h
+
+# PlatformIO
+.pio/
+.pioenvs/
+.piolibdeps/
+
+# Arduino
+*.elf
+*.bin
+*.hex
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# VS Code
+.vscode/
+!.vscode/extensions.json
+
+# GSD e SDD
+.planning/
+.kiro/
+
+# Logs
+*.log
+
+
