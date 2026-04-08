@@ -15,8 +15,8 @@
 #include <WiFiClientSecure.h>
 #include <ArduinoJson.h>
 #include <Firebase_ESP_Client.h>
-#include "addons/TokenHelper.h" // Provide the token generation process info.
-#include "addons/RTDBHelper.h"  // Provide the RTDB payload printing info and other helper functions.
+#include "addons/TokenHelper.h"
+#include "addons/RTDBHelper.h"
 #include <Ticker.h>
 #include <SimpleTimer.h>
 #include <OTAUpdate.h>
@@ -40,10 +40,8 @@ SimpleTimer timer;
 Ticker wdtReset;
 Ticker alarmInterval;
 
-// Database main paths (to be updated in setup with the user UID)
+// Database main path (updated in setup with user UID)
 String databasePath;
-String databaseAlertPath;
-String databaseThresholdPath;
 
 // Variable to save Firebase USER UID
 String uid;
@@ -56,14 +54,13 @@ ADC_MODE(ADC_VCC);
 
 void firebaseInit()
 {
-  // Send readings to database
   Serial.println("Entrando no Firebase Init");
-  json.clear(); // Clear previous data
+  json.clear();
   json.add(deviceNamePath, String(DEVICE_NAME));
-  json.add(configPath + "/deviceUUID", String(DEVICE_UUID));
-  json.add("/data/deviceStatus", "online");
+  json.add(deviceUUIDPath, String(DEVICE_UUID));   // raiz do device, não config/
+  json.add(statusPath, String("online"));
   Serial.printf("Set json... %s\n", Firebase.RTDB.updateNode(&fbdo, databasePath.c_str(), &json) ? "ok" : fbdo.errorReason().c_str());
-  json.clear(); // Clear previous data
+  json.clear();
   Serial.println("Saindo do Firebase Init");
 }
 
@@ -82,7 +79,6 @@ void saveConfigCallback()
 
 bool setupWiFiManager(WiFiManager &wifiManager)
 {
-  // Read the email and password already saved in EEPROM
   USER_EMAIL = readStringFromEEPROM(EMAIL_ADDR);
   USER_PASSWORD = readStringFromEEPROM(PASS_ADDR);
   DEVICE_NAME = readStringFromEEPROM(DEVICE_NAME_ADDR);
@@ -90,20 +86,16 @@ bool setupWiFiManager(WiFiManager &wifiManager)
   STA_NAME = WiFi.hostname();
   Serial.println(STA_NAME);
 
-  // Create custom parameters for email and password.
   static WiFiManagerParameter custom_email("Email", "Digite seu email", USER_EMAIL.c_str(), 40);
   static WiFiManagerParameter custom_password("Senha", "Digite sua senha", USER_PASSWORD.c_str(), 40, "type='password'");
   static WiFiManagerParameter custom_device_name("Equipamento", "Digite o nome do equipamento", DEVICE_NAME.c_str(), 40);
 
-  // Add the custom parameters to WiFiManager
   wifiManager.addParameter(&custom_email);
   wifiManager.addParameter(&custom_password);
   wifiManager.addParameter(&custom_device_name);
 
-  // Set save config callback to handle updated parameters
   wifiManager.setSaveConfigCallback([]()
-                                    {
-    // Access and modify the static variables directly
+  {
     newEmail = custom_email.getValue();
     newPassword = custom_password.getValue();
     newDeviceName = custom_device_name.getValue();
@@ -116,13 +108,13 @@ bool setupWiFiManager(WiFiManager &wifiManager)
       writeStringToEEPROM(DEVICE_NAME_ADDR, DEVICE_NAME);
       EEPROM.commit();
       Serial.println("Updated email, password and deviceName saved to EEPROM.");
-    } });
-  return true; // Return true if everything is setup correctly.
+    }
+  });
+  return true;
 }
 
 void initWifiManager()
 {
-  // Initialize the WiFiManager and custom parameters
   WiFiManager wifiManager;
   wifiManager.setDebugOutput(true);
   wifiManager.setConfigPortalTimeout(30);
@@ -131,63 +123,49 @@ void initWifiManager()
   if (!setupWiFiManager(wifiManager))
   {
     Serial.println("Failed to setup WiFi Manager");
-    return; // Stop further execution if WiFiManager setup fails.
+    return;
   }
-  // Attempt to connect using saved settings; if it fails, start the configuration portal.
   if (!wifiManager.autoConnect("IoTemp Setup"))
   {
     Serial.println("Failed to connect and hit timeout");
-    return; // Stop further execution if unable to connect.
+    return;
   }
 }
 
-// Function that gets current epoch time
 unsigned long getTime()
 {
   timeClient.update();
-  unsigned long now_udp = timeClient.getEpochTime();
-  return now_udp;
+  return timeClient.getEpochTime();
 }
 
 void getDeviceConfigurations()
 {
   Serial.println("Entrei getDeviceConfigurations");
 
-  // Verificar se o Firebase está pronto
   if (!Firebase.ready())
   {
-    Serial.println("Erro: Firebase não está pronto.");
-    Serial.println("Erro: vou resetar 1");
+    Serial.println("Erro: Firebase não está pronto. Reiniciando.");
     Serial.flush();
     Serial.end();
     ESP.restart();
     return;
   }
 
-  // Construir o caminho completo do banco de dados
   String fullPath = databasePath + configPath;
 
-  // Tentar obter os dados do banco de dados Firebase em tempo real
   if (!Firebase.RTDB.getJSON(&fbdo, fullPath))
   {
-    Serial.println("Erro ao obter os dados do banco de dados Firebase.");
-    Serial.println("Erro: Firebase não está pronto.");
+    Serial.println("Erro ao obter configurações do Firebase.");
     return;
   }
 
-  // Verificar o tipo de dados obtido
   if (fbdo.dataType() != "json")
   {
-    Serial.println("Erro: Os dados obtidos não são do tipo JSON.");
+    Serial.println("Erro: dados não são JSON.");
     return;
   }
 
-  // Obter a string JSON dos dados
-  String fbdoJson = fbdo.jsonString();
-  // Serial.println(fbdoJson);
-
-  // Desserializar a string JSON
-  DeserializationError error = deserializeJson(doc, fbdoJson);
+  DeserializationError error = deserializeJson(doc, fbdo.jsonString());
   if (error)
   {
     Serial.print(F("Erro ao desserializar JSON: "));
@@ -195,32 +173,38 @@ void getDeviceConfigurations()
     return;
   }
 
-  // Obter os limiares de temperatura do documento JSON
-  higherTemp = doc["_threshold"]["higherTemp"].as<float>();
-  lowerTemp = doc["_threshold"]["lowerTemp"].as<float>();
+  // --- Thresholds ---
+  higherTemp = doc["_threshold"]["higherTemp"] | 80.0f;
+  lowerTemp  = doc["_threshold"]["lowerTemp"]  | -80.0f;
+  thresholdMode = doc["_threshold"]["thresholdMode"] | "both";
 
-  if (higherTemp == 0.00 and lowerTemp == 0.00)
+  Serial.printf("Threshold: lower=%.1f  higher=%.1f  mode=%s\n",
+                lowerTemp, higherTemp, thresholdMode.c_str());
+
+  // --- Medições programadas ---
+  scheduledReadingsEnabled = doc["scheduledReadings"]["isEnabled"] | false;
+  scheduledIntervalMinutes = doc["scheduledReadings"]["intervalMinutes"] | 5;
+  scheduledStartHour       = doc["scheduledReadings"]["startHour"] | 0;
+
+  if (scheduledReadingsEnabled && scheduledIntervalMinutes > 0)
   {
-    higherTemp = 80.0;
-    lowerTemp = -80.0;
+    timerDelay = (unsigned long)scheduledIntervalMinutes * 60UL * 1000UL;
+    Serial.printf("ScheduledReadings: habilitado, intervalo=%d min\n", scheduledIntervalMinutes);
   }
-
-  Serial.print("Higher Temp. Threshold: ");
-  Serial.println(higherTemp);
-  Serial.print("Lower Temp. Threshold: ");
-  Serial.println(lowerTemp);
-  Serial.println("");
+  else
+  {
+    timerDelay = 300000UL; // padrão 5 minutos
+    Serial.println("ScheduledReadings: desabilitado, usando padrão 5 min");
+  }
 
   Serial.println("Saí getDeviceConfigurations");
 }
 
-// Read temperature from DS18B20 sensor
 float readTemperature()
 {
   Serial.println("Entrei readTemperature");
-  sensors.requestTemperatures();            // Request temperature reading
-  float tempC = sensors.getTempCByIndex(0); // Get temperature in Celsius
-
+  sensors.requestTemperatures();
+  float tempC = sensors.getTempCByIndex(0);
   if (tempC == -127.0 || tempC == 85.0)
   {
     tempC = 888.0;
@@ -229,45 +213,25 @@ float readTemperature()
   return tempC;
 }
 
-// This function plays an alarm sound
+// Toca alarme sonoro com frequência decrescente (2000→500 Hz) por 30 segundos
 void alarmSound()
 {
   Serial.println("Entrei no Alarm sound");
   unsigned long startTime = millis();
-  unsigned long currentTime;
-  unsigned long beepDuration = 3000; // Duração inicial entre beeps em milissegundos
-  unsigned long previousBeepTime = millis();
-  bool buzzerState = false;
+  unsigned int freq = 2000;
 
   while (millis() - startTime < 30000)
-  { // Execute por 30 segundos
-    currentTime = millis();
-    if (currentTime - previousBeepTime >= beepDuration)
-    {
-      previousBeepTime = currentTime;
-      beepDuration = beepDuration * 0.9;                  // Reduz a duração do beep em 10%
-      buzzerState = !buzzerState;                         // Alterna o estado do buzzer
-      digitalWrite(BUZZER_PIN, buzzerState ? HIGH : LOW); // Liga ou desliga o buzzer
-
-      // Liga ou desliga o display de acordo com o estado do buzzer
-      if (buzzerState)
-      {
-        drawAlarm();
-      }
-      else
-      {
-        drawTemperature();
-      }
-    }
-    yield();   // Alimente o watchdog timer
-    delay(10); // Adicione um pequeno delay para evitar sobrecarga
+  {
+    tone(BUZZER_PIN, freq, 200);           // toca 200 ms
+    delay(300);                             // pausa 100 ms
+    freq = max(500u, freq - 50u);           // reduz frequência gradualmente
+    yield();
   }
-  digitalWrite(BUZZER_PIN, LOW); // Garante que o buzzer esteja desligado ao fim do alarme
+  noTone(BUZZER_PIN);
   drawTemperature();
   Serial.println("Saí do Alarm sound");
 }
 
-/* This function joins the alarm sound and draw the alarm on OLED Display */
 void sendAlarm()
 {
   drawAlarm();
@@ -277,26 +241,40 @@ void sendAlarm()
 void checkThresholdAlert()
 {
   Serial.println("Entrei checkThresholdAlert");
+
   if (temperature == 888.0 || temperature == -127.0)
   {
-    Serial.println("Sensor enviou leitura errada!");
+    Serial.println("Sensor enviou leitura inválida!");
     countMessageSending = 0;
+    return;
   }
-  else if (temperature > higherTemp)
+
+  if (thresholdMode == "none")
+  {
+    Serial.println("ThresholdMode=none: alarme desabilitado.");
+    countMessageSending = 0;
+    return;
+  }
+
+  bool overHigh  = (thresholdMode == "both" || thresholdMode == "above") && temperature > higherTemp;
+  bool underLow  = (thresholdMode == "both" || thresholdMode == "below") && temperature < lowerTemp;
+
+  if (overHigh)
   {
     Serial.println("Limite de Alta Temperatura Extrapolado!");
     sendAlarm();
   }
-  else if (temperature < lowerTemp)
+  else if (underLow)
   {
     Serial.println("Limite de Baixa Temperatura Extrapolado!");
     sendAlarm();
   }
   else
   {
-    Serial.println("Temperatura Dentro dos Limites!");
+    Serial.println("Temperatura dentro dos limites.");
     countMessageSending = 0;
   }
+
   Serial.println("Saí checkThresholdAlert");
 }
 
@@ -315,12 +293,11 @@ void ISRWatchDog()
 void sendDataToFireBase()
 {
   Serial.println("Entrei sendDataToFireBase");
-  // Send new readings to database
   sendDataPrevMillis = millis();
 
   getDeviceConfigurations();
 
-  timestamp = getTime();
+  timestamp = (int)getTime();
   Serial.print("time: ");
   Serial.println(timestamp);
 
@@ -330,22 +307,24 @@ void sendDataToFireBase()
     Serial.println(temperature);
 
     drawTemperature();
-    // Send readings to database
-    json.clear(); // Clear previous data
-    json.set(deviceNamePath.c_str(), String(DEVICE_NAME));
-    json.set(tempPath.c_str(), String(temperature));
-    json.set(timestampPath.c_str(), String(timestamp));
-    json.set(("/data/deviceStatus"), String("online"));
-    json.add(("/datalogger/" + String(timestamp) + dataloggerTempPath).c_str(), String(temperature));
-    json.add(("/datalogger/" + String(timestamp) + dataloggerTimestampPath).c_str(), String(timestamp));
+
+    json.clear();
+    json.set(deviceNamePath.c_str(),  String(DEVICE_NAME));
+    json.set(tempPath.c_str(),        temperature);          // float, não String
+    json.set(timestampPath.c_str(),   timestamp);            // int, não String
+    json.set(statusPath.c_str(),      String("online"));
+    // Datalogger: temperatura (float) e timestamp (int)
+    json.set(("/datalogger/" + String(timestamp) + dataloggerTempPath).c_str(),      temperature);
+    json.set(("/datalogger/" + String(timestamp) + dataloggerTimestampPath).c_str(), timestamp);
     Serial.printf("Set json... %s\n", Firebase.RTDB.updateNode(&fbdo, databasePath.c_str(), &json) ? "ok" : fbdo.errorReason().c_str());
     json.clear();
+
     checkThresholdAlert();
   }
   else
   {
     drawWaitingForTemperature();
-    Serial.println("Temperatura invalida e/ou Timestamp invalido.");
+    Serial.println("Temperatura inválida e/ou Timestamp inválido.");
   }
 
   countDataSentToFireBase += 1;
@@ -356,7 +335,7 @@ void callFirebase()
 {
   Serial.println("Entrei callFirebase");
 
-  temperature = readTemperature(); // Get latest sensor readings
+  temperature = readTemperature();
   drawTemperature();
 
   if (Firebase.ready() && (millis() - sendDataPrevMillis > timerDelay || sendDataPrevMillis == 0))
@@ -380,10 +359,7 @@ void callFirebase()
     countMessageSending += 1;
     checkThresholdAlert();
   }
-  else
-  {
-    // Serial.println("countMessageSending: " + String(countMessageSending));
-  }
+
   Serial.println("Saí callFirebase");
 }
 
@@ -400,21 +376,17 @@ void boardLedInitialization()
 
 void setup()
 {
-  // Initialize serial communication and baudrate
   Serial.begin(115200);
 
   pinMode(LED_BUILTIN, OUTPUT);
   boardLedInitialization();
 
-  // Initializing OLED display
   display.init();
   display.flipScreenVertically();
 
-  // Initialize EEPROM with the required size.
   EEPROM.begin(EEPROM_SIZE);
 
-  // Read the email, password, and device name from EEPROM
-  USER_EMAIL = readStringFromEEPROM(EMAIL_ADDR);
+  USER_EMAIL  = readStringFromEEPROM(EMAIL_ADDR);
   USER_PASSWORD = readStringFromEEPROM(PASS_ADDR);
   DEVICE_NAME = readStringFromEEPROM(DEVICE_NAME_ADDR);
 
@@ -423,14 +395,10 @@ void setup()
   Serial.println(USER_PASSWORD);
   Serial.println(DEVICE_NAME);
 
-  DEVICE_UUID = ESP.getChipId();
+  DEVICE_UUID = String(ESP.getChipId());
   Serial.print("ESP Chip Id: ");
   Serial.println(DEVICE_UUID);
 
-  Serial.print("ESP Flash Chip Id: ");
-  Serial.println(ESP.getFlashChipId());
-
-  // Check if email or password is empty or null
   if (USER_EMAIL == "" || USER_PASSWORD == "" || DEVICE_NAME == "")
   {
     drawWifiNotConfigured();
@@ -442,84 +410,60 @@ void setup()
     if (!setupWiFiManager(wifiManager))
     {
       Serial.println("Failed to setup WiFi Manager");
-      // Handle failure (e.g., reset device, retry, etc.)
       ESP.restart();
     }
     wifiManager.startConfigPortal("IoTemp Setup");
   }
   else
   {
-    // Initializing Wi-Fi
     initWifiManager();
     drawWifiDetail();
   }
 
   WIFI_SSID = WiFi.SSID();
 
-  /* Initialising the timer interval to get temperature */
   timer.setInterval(GET_DATA_INTERVAL, callFirebase);
 
-  // Initializing Watchdog Reset
   wdtReset.attach(1, ISRWatchDog);
 
   timeClient.begin();
 
-  // Configuring buzzer and button pins
   pinMode(BUZZER_PIN, OUTPUT);
   pinMode(BUTTON_S1_PIN, INPUT_PULLUP);
   pinMode(BUTTON_S2_PIN, INPUT);
+  digitalWrite(BUZZER_PIN, LOW);
 
-  digitalWrite(BUZZER_PIN, LOW); // Garante que o buzzer comece desligado
-
-  // Initializing DS18B20 sensor
   sensors.begin();
   sensors.getAddress(sensorAddress, 0);
-  sensors.setResolution(sensorAddress, 12); // Setting sensor resolution to 12 bits (0.0625°C)
+  sensors.setResolution(sensorAddress, 12);
 
-  // Assigning the API key (required)
-  config.api_key = API_KEY;
-  // Assigning the user sign-in credentials
-  auth.user.email = USER_EMAIL;
-  auth.user.password = USER_PASSWORD;
-  // Assigning the RTDB URL (required)
+  config.api_key      = API_KEY;
+  auth.user.email     = USER_EMAIL;
+  auth.user.password  = USER_PASSWORD;
   config.database_url = DATABASE_URL;
 
-  // Firebase.reconnectWiFi(true);
   Firebase.reconnectNetwork(true);
   fbdo.setResponseSize(4096);
-
-  // Assigning the callback function for the long running token generation task
-  config.token_status_callback = tokenStatusCallback; // see addons/TokenHelper.h
-
-  // Assigning the maximum retry of token generation
+  config.token_status_callback = tokenStatusCallback;
   config.max_token_generation_retry = 5;
-
-  // Initializing the library with the Firebase auth and config
   Firebase.begin(&config, &auth);
 
-  // Getting the user UID might take a few seconds
   Serial.println("Getting User UID");
   while ((auth.token.uid) == "")
   {
     Serial.print('.');
     delay(1000);
   }
-  // Printing user UID
   uid = auth.token.uid.c_str();
   Serial.print("User UID: ");
   Serial.println(uid);
-  Serial.print("Device Name: ");
-  Serial.println(DEVICE_NAME);
 
-  // Update Database main paths (to be updated in setup with the user UID)
   databasePath = "/UsersData/" + uid + "/devices/" + DEVICE_NAME;
-  databaseAlertPath = databasePath + alertPath;
-  databaseThresholdPath = databasePath + configPath + thresholdPath;
 
-  Serial.println("Calling Firease Init.");
+  Serial.println("Calling Firebase Init.");
   firebaseInit();
 
-  Serial.println("Configuracoes: ");
+  Serial.println("Obtendo configurações iniciais.");
   getDeviceConfigurations();
 
   OTAsetup();
@@ -527,7 +471,6 @@ void setup()
 
 void checkButtons()
 {
-  // Serial.println("Entrei checkButton");
   if (digitalRead(BUTTON_S2_PIN) == HIGH)
   {
     Serial.println("Entrei botao 02");
@@ -545,7 +488,6 @@ void checkButtons()
     Serial.println(watchDogCount);
   }
   delay(100);
-  // Serial.println("Sai checkButton");
 }
 
 void setupNewWM()
@@ -560,23 +502,20 @@ void setupNewWM()
     if (!setupWiFiManager(wifiManager))
     {
       Serial.println("Failed to re-setup WiFi Manager");
-      return; // Stop further execution if setup fails.
+      return;
     }
     STA_NAME = "IoTemp Setup - " + STA_NAME;
     drawWifiNotConfigured();
     wifiManager.startConfigPortal(STA_NAME.c_str());
   }
-  // Check the button state
   if (digitalRead(BUTTON_S1_PIN) == HIGH)
   {
-    // Button is pressed
     if (buttonS1PressedTime == 0)
-    {                                 // Check if the timer is not started yet
-      buttonS1PressedTime = millis(); // Start the timer
+    {
+      buttonS1PressedTime = millis();
     }
     else if (millis() - buttonS1PressedTime >= BUTTON_S1_HOLD_TIME)
     {
-      // Button has been held for 5 seconds
       WiFiManager wifiManager;
       wifiManager.setDebugOutput(true);
       wifiManager.setConnectTimeout(60);
@@ -584,43 +523,40 @@ void setupNewWM()
       if (!setupWiFiManager(wifiManager))
       {
         Serial.println("Failed to re-setup WiFi Manager");
-        return; // Stop further execution if setup fails.
+        return;
       }
       STA_NAME = "IoTemp Setup - " + STA_NAME;
       drawWifiNotConfigured();
       wifiManager.startConfigPortal(STA_NAME.c_str());
       ESP.reset();
-      buttonS1PressedTime = 0; // Reset timer
+      buttonS1PressedTime = 0;
     }
   }
   else
   {
-    buttonS1PressedTime = 0; // Reset timer if the button is released
+    buttonS1PressedTime = 0;
   }
 }
 
 void resetDevice()
 {
-  // Check the button state
   if (digitalRead(BUTTON_S2_PIN) == HIGH)
   {
-    // Button is pressed
     if (buttonS2PressedTime == 0)
-    {                                 // Check if the timer is not started yet
-      buttonS2PressedTime = millis(); // Start the timer
+    {
+      buttonS2PressedTime = millis();
     }
     else if (millis() - buttonS2PressedTime >= BUTTON_S2_HOLD_TIME)
     {
-      // Button has been held for 10 seconds
       drawResetDevice();
       delay(2000);
       ESP.reset();
-      buttonS2PressedTime = 0; // Reset the timer
+      buttonS2PressedTime = 0;
     }
   }
   else
   {
-    buttonS2PressedTime = 0; // Reset the timer if the button is released
+    buttonS2PressedTime = 0;
   }
 }
 
