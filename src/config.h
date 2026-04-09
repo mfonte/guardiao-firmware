@@ -2,9 +2,12 @@
 const int EMAIL_ADDR = 0;         // Initial address for the email
 const int PASS_ADDR = 100;        // Initial address for the password
 const int DEVICE_NAME_ADDR = 200; // Initial address for the device name
+const int LDID_ADDR = 300;        // Initial address for LDID (Logical Device ID)
+const int LDID_SIZE = 64;         // Max LDID size
 
 String DEVICE_UUID;
 String DEVICE_NAME;
+String DEVICE_LDID;              // Logical Device ID (persistent, immutable)
 String USER_EMAIL;
 String USER_PASSWORD;
 String newEmail;
@@ -13,6 +16,10 @@ String newDeviceName;
 String WIFI_SSID;
 String STA_NAME;
 String HOST_NAME;  // OTA Configuration and Wi-Fi Ap STA
+
+// Firmware version
+#define FIRMWARE_VERSION "0.1.0"
+#define HEARTBEAT_INTERVAL 300000L  // 5 minutes
 
 // Firebase RTDB configuration
 #define API_KEY "AIzaSyBcXGVkyUs7Nj2o5y9_GP7xhMCcQQdg11U"  // Insert Firebase project API Key
@@ -66,8 +73,10 @@ int countDataSentToFireBase = 0;
 
 // Timer variables
 unsigned long sendDataPrevMillis = 0;
+unsigned long lastHeartbeatMillis = 0;
 unsigned long buttonS1PressedTime = 0;
 unsigned long buttonS2PressedTime = 0;
+uint8_t resetReason = 1;  // 1=power, 2=watchdog, 3=OTA, 4=manual
 
 // Sensor
 float temperature = -127.0;

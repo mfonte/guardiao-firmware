@@ -570,3 +570,56 @@ void loop()
   ArduinoOTA.handle();
   yield();
 }
+
+// Protocol v2: Generate LDID if not exists
+void generateOrLoadLDID() {
+  DEVICE_LDID = readStringFromEEPROM(LDID_ADDR);
+  if (DEVICE_LDID == "") {
+    DEVICE_LDID = "ldid-" + String(DEVICE_UUID) + "-001";
+    writeStringToEEPROM(LDID_ADDR, DEVICE_LDID);
+    Serial.println("LDID generated: " + DEVICE_LDID);
+  } else {
+    Serial.println("LDID loaded: " + DEVICE_LDID);
+  }
+}
+
+// Protocol v2: Calculate status bitmap
+uint8_t calculateStatusBitmap() {
+  uint8_t st = 0x01;  // always online (bit 0)
+  if (temperature == 888.0 || temperature == -127.0) st |= 0x04;  // error reading
+  bool highAlert = (thresholdMode == "both" || thresholdMode == "upperOnly") && temperature > higherTemp;
+  bool lowAlert = (thresholdMode == "both" || thresholdMode == "lowerOnly") && temperature < lowerTemp;
+  if (highAlert || lowAlert) st |= 0x10;  // alert
+  return st;
+}
+
+// Protocol v2: Send Boot message
+void sendBootMessage() {
+  json.clear();
+  json.add("v", 2);
+  json.add("m", "B");
+  json.add("ts", (int)getTime());
+  json.set("d/uuid", DEVICE_UUID);
+  json.set("d/fw", FIRMWARE_VERSION);
+  json.set("d/rst", resetReason);
+  json.set("d/heap", ESP.getFreeHeap());
+  json.set("d/wifi", WiFi.RSSI());
+  String bootPath = "/UsersData/" + uid + "/devices/" + DEVICE_LDID + "/boot";
+  Serial.printf("Boot msg: %s\n", Firebase.RTDB.updateNode(&fbdo, bootPath.c_str(), &json) ? "ok" : fbdo.errorReason().c_str());
+  json.clear();
+}
+
+// Protocol v2: Send Heartbeat
+void sendHeartbeat() {
+  json.clear();
+  json.add("v", 2);
+  json.add("m", "H");
+  json.add("ts", (int)getTime());
+  json.set("d/st", calculateStatusBitmap());
+  json.set("d/heap", ESP.getFreeHeap());
+  json.set("d/wifi", WiFi.RSSI());
+  String heartbeatPath = "/UsersData/" + uid + "/devices/" + DEVICE_LDID + "/heartbeat";
+  Firebase.RTDB.updateNode(&fbdo, heartbeatPath.c_str(), &json);
+  json.clear();
+  lastHeartbeatMillis = millis();
+}
