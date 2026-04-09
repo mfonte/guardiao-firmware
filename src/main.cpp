@@ -256,8 +256,8 @@ void checkThresholdAlert()
     return;
   }
 
-  bool overHigh  = (thresholdMode == "both" || thresholdMode == "above") && temperature > higherTemp;
-  bool underLow  = (thresholdMode == "both" || thresholdMode == "below") && temperature < lowerTemp;
+  bool overHigh = (thresholdMode == "both" || thresholdMode == "upperOnly") && temperature > higherTemp;
+  bool underLow = (thresholdMode == "both" || thresholdMode == "lowerOnly") && temperature < lowerTemp;
 
   if (overHigh)
   {
