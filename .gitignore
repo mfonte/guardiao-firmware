@@ -29,3 +29,4 @@ secrets.h
 *.log
 
 
+.claude/
