@@ -32,7 +32,7 @@ String HOST_NAME; // OTA Configuration and Wi-Fi Ap STA
 #define SDA D2                    // Display SDA pin
 #define SCL D1                    // Display SCL pin
 #define ONE_WIRE_BUS D5           // DS18B20 data wire
-#define BUZZER_PIN D6             // Buzzer passivo — GPIO12, suporta PWM, sem restrição de boot
+#define BUZZER_PIN D6             // Passive buzzer — GPIO12, supports PWM, no boot restriction
 #define BUTTON_S1_PIN D8          // D8 => S1 On TagsApp Board - V2.0
 #define BUTTON_S2_PIN D7          // D7 => S2 On TagsApp Board - V2.0
 #define GET_DATA_INTERVAL 5000L   // Local sensor read every 5 seconds
