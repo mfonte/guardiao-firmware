@@ -52,6 +52,12 @@ JsonDocument doc;
 // Configurar o modo ADC para ler a tensão de alimentação
 ADC_MODE(ADC_VCC);
 
+// Forward declarations — Protocol v2 functions defined after loop()
+void generateOrLoadLDID();
+uint8_t calculateStatusBitmap();
+void sendBootMessage();
+void sendHeartbeat();
+
 /**
  * Writes initial device identity and online status to Firebase RTDB.
  * Called once during setup after Firebase authentication succeeds.
@@ -206,11 +212,11 @@ void getDeviceConfigurations()
                 lowerTemp, higherTemp, thresholdMode.c_str());
 
   // --- Scheduled readings ---
-  scheduledReadingsEnabled = doc["scheduledReadings"]["isEnabled"] | false;
-  scheduledIntervalMinutes = doc["scheduledReadings"]["intervalMinutes"] | 5;
+  // NOTE: isEnabled was never written by the app — derive from intervalMinutes > 0
+  scheduledIntervalMinutes = doc["scheduledReadings"]["intervalMinutes"] | 0;
   scheduledStartHour = doc["scheduledReadings"]["startHour"] | 0;
 
-  if (scheduledReadingsEnabled && scheduledIntervalMinutes > 0)
+  if (scheduledIntervalMinutes > 0)
   {
     timerDelay = (unsigned long)scheduledIntervalMinutes * 60UL * 1000UL;
     Serial.printf("ScheduledReadings: enabled, interval=%d min\n", scheduledIntervalMinutes);
@@ -218,7 +224,7 @@ void getDeviceConfigurations()
   else
   {
     timerDelay = 300000UL; // default: 5 minutes
-    Serial.println("ScheduledReadings: disabled, using default 5 min");
+    Serial.println("ScheduledReadings: not configured, using default 5 min");
   }
 
   Serial.println("Leaving getDeviceConfigurations");
@@ -515,13 +521,18 @@ void setup()
   Serial.print("User UID: ");
   Serial.println(uid);
 
-  databasePath = "/UsersData/" + uid + "/devices/" + DEVICE_NAME;
+  // Protocol v2: generate or load persistent LDID, use as RTDB device node key
+  generateOrLoadLDID();
+  databasePath = "/UsersData/" + uid + "/devices/" + DEVICE_LDID;
 
   Serial.println("Calling Firebase Init.");
   firebaseInit();
 
   Serial.println("Loading initial device configurations.");
   getDeviceConfigurations();
+
+  // Protocol v2: send boot message after init
+  sendBootMessage();
 
   OTAsetup();
 }
@@ -635,12 +646,23 @@ void loop()
   setupNewWM();
   resetDevice();
   checkButtons();
+
+  // Protocol v2: periodic heartbeat
+  if (millis() - lastHeartbeatMillis > HEARTBEAT_INTERVAL)
+  {
+    sendHeartbeat();
+  }
+
   watchDogCount = 0;
   ArduinoOTA.handle();
   yield();
 }
 
-// Protocol v2: Generate LDID if not exists
+/**
+ * Generates a persistent Logical Device ID (LDID) or loads an existing one
+ * from EEPROM. The LDID is immutable once created and used as the RTDB
+ * device node key to survive device renames.
+ */
 void generateOrLoadLDID()
 {
   DEVICE_LDID = readStringFromEEPROM(LDID_ADDR);
@@ -656,7 +678,10 @@ void generateOrLoadLDID()
   }
 }
 
-// Protocol v2: Calculate status bitmap
+/**
+ * Builds a status bitmap for protocol v2 heartbeat messages.
+ * bit 0: online, bit 2: sensor read error, bit 4: threshold alert active.
+ */
 uint8_t calculateStatusBitmap()
 {
   uint8_t st = 0x01; // always online (bit 0)
@@ -669,7 +694,10 @@ uint8_t calculateStatusBitmap()
   return st;
 }
 
-// Protocol v2: Send Boot message
+/**
+ * Sends a protocol v2 Boot message to Firebase with device metadata
+ * (UUID, firmware version, reset reason, free heap, WiFi RSSI).
+ */
 void sendBootMessage()
 {
   json.clear();
@@ -686,7 +714,10 @@ void sendBootMessage()
   json.clear();
 }
 
-// Protocol v2: Send Heartbeat
+/**
+ * Sends a protocol v2 Heartbeat to Firebase with the current status bitmap,
+ * free heap and WiFi RSSI. Called periodically from loop().
+ */
 void sendHeartbeat()
 {
   json.clear();

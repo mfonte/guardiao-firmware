@@ -57,15 +57,14 @@ String alertPath = "/_alert";
 // Threshold variables (read from Firebase on each sync cycle)
 float higherTemp = 80.0;
 float lowerTemp = -80.0;
-String thresholdMode = "both"; // "both" | "above" | "below" | "none"
+String thresholdMode = "both"; // "both" | "upperOnly" | "lowerOnly" | "none"
 
 // Scheduled readings variables (read from Firebase)
-bool scheduledReadingsEnabled = false;
-int scheduledIntervalMinutes = 5; // padrão: 5 minutos
+int scheduledIntervalMinutes = 0; // 0 = not configured, use default
 int scheduledStartHour = 0;
 
 // Firebase send interval (ms, updated dynamically from remote config)
-unsigned long timerDelay = 300000L; // padrão: 5 minutos
+unsigned long timerDelay = 300000L; // default: 5 minutes
 
 // Variable to hold the current epoch timestamp
 int timestamp = 0;
@@ -83,6 +82,4 @@ uint8_t resetReason = 1; // 1=power, 2=watchdog, 3=OTA, 4=manual
 
 // Sensor
 float temperature = -127.0;
-float higherTempRead = 80.0;
-float lowerTempRead = -80.0;
 uint32_t BATTERY_LEVEL;
