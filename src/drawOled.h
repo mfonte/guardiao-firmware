@@ -216,6 +216,7 @@ void initUIFramework()
   ui.setOverlays(uiOverlays, uiOverlayCount);
   ui.setIndicatorPosition(BOTTOM);
   ui.init();
+  display.flipScreenVertically(); // re-apply after ui.init() resets orientation
 }
 
 // ====================================================================
