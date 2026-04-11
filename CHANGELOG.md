@@ -1,26 +1,29 @@
 # Changelog — guardiao-firmware
 
-Todas as mudanças notáveis deste projeto serão documentadas aqui.
-Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.0/).
-Versionamento seguindo [Semantic Versioning](https://semver.org/lang/pt-BR/).
+All notable changes to this project will be documented here.
+Format based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
+Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
 ## [Unreleased]
 
-### Planejado
-- Leitura do sensor DS18B20 via OneWire
-- Envio de dados via HTTP para Firebase Realtime DB
-- Reconexão automática Wi-Fi
-- Buzzer local para alertas
+### Added
+- DS18B20 temperature sensor reading via OneWire
+- Data push via HTTP to Firebase Realtime Database
+- Automatic Wi-Fi reconnection via WiFiManager captive portal
+- Passive buzzer alarm for threshold violations
+- OLED display (SSD1306) for status, temperature, WiFi info
+- Protocol v2: persistent LDID, boot messages, periodic heartbeats
+- OTA update support via ArduinoOTA
 
 ---
 
-<!-- Exemplo de release:
+<!-- Example release:
 ## [0.1.0] - YYYY-MM-DD
 
 ### Added
-- Leitura de temperatura DS18B20 (#1)
-- Envio HTTP para Firebase (#2)
-- Reconexão Wi-Fi automática (#3)
+- DS18B20 temperature reading (#1)
+- HTTP push to Firebase (#2)
+- Automatic Wi-Fi reconnection (#3)
 -->

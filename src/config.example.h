@@ -25,8 +25,8 @@ String HOST_NAME; // OTA Configuration and Wi-Fi Ap STA
 #define HEARTBEAT_INTERVAL 300000L // 5 minutes
 
 // Firebase RTDB configuration
-#define API_KEY "SUA_FIREBASE_API_KEY"
-#define DATABASE_URL "https://seu-projeto-default-rtdb.firebaseio.com/"
+#define API_KEY "YOUR_FIREBASE_API_KEY"
+#define DATABASE_URL "https://your-project-default-rtdb.firebaseio.com/"
 
 // Board configuration
 #define SDA D2                    // Display SDA pin
