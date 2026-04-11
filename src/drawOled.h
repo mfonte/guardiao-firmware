@@ -32,6 +32,7 @@ unsigned int alarmFreq = 2000;
 bool alarmToneOn = false;
 
 float prevTemperature = -127.0;
+unsigned long lastVccMs = 0;
 bool firebaseConnected = false;
 
 unsigned long s1PressStart = 0;
@@ -45,28 +46,28 @@ void openConfigPortal();
 // FRAME CALLBACKS (drawn by OLEDDisplayUi)
 // ====================================================================
 
-/** Frame 0: Temperature with trend arrow and threshold bar. */
+/** Frame 0: Temperature — large reading with trend arrow. */
 void frameTemperature(OLEDDisplay *d, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
   d->setTextAlignment(TEXT_ALIGN_CENTER);
-  d->setFont(ArialMT_Plain_10);
+  d->setFont(ArialMT_Plain_16);
   d->drawString(64 + x, CONTENT_Y + y, DEVICE_NAME);
 
   if (temperature == -127.0 || temperature == 888.0)
   {
     d->setFont(ArialMT_Plain_16);
-    d->drawString(64 + x, 30 + y, "Syncing...");
+    d->drawString(64 + x, 34 + y, "Syncing...");
     return;
   }
 
   String tempStr = String(temperature, 1);
   d->setFont(ArialMT_Plain_24);
   d->setTextAlignment(TEXT_ALIGN_RIGHT);
-  d->drawString(95 + x, 24 + y, tempStr);
+  d->drawString(95 + x, 30 + y, tempStr);
 
   d->setFont(ArialMT_Plain_10);
   d->setTextAlignment(TEXT_ALIGN_LEFT);
-  d->drawString(97 + x, 24 + y, "\xB0" "C");
+  d->drawString(97 + x, 30 + y, "\xB0" "C");
 
   if (prevTemperature != -127.0 && prevTemperature != 888.0)
   {
@@ -76,25 +77,44 @@ void frameTemperature(OLEDDisplay *d, OLEDDisplayUiState *state, int16_t x, int1
       arrow = icon_arrow_up;
     else if (diff < -0.3)
       arrow = icon_arrow_down;
-    d->drawXbm(4 + x, 30 + y, ICON_SIZE, ICON_SIZE, arrow);
+    d->drawXbm(4 + x, 36 + y, ICON_SIZE, ICON_SIZE, arrow);
+  }
+}
+
+/** Frame 1: Threshold — position bar + limits + current value. Only shown when threshold is set. */
+void frameThreshold(OLEDDisplay *d, OLEDDisplayUiState *state, int16_t x, int16_t y)
+{
+  d->setTextAlignment(TEXT_ALIGN_CENTER);
+  d->setFont(ArialMT_Plain_10);
+  d->drawString(64 + x, CONTENT_Y + y, "Threshold");
+
+  if (thresholdMode == "none")
+  {
+    d->setFont(ArialMT_Plain_10);
+    d->drawString(64 + x, 34 + y, "Not configured");
+    return;
   }
 
-  if (thresholdMode != "none")
+  float range = higherTemp - lowerTemp;
+  if (range > 0 && temperature > -126.0 && temperature < 887.0)
   {
-    float range = higherTemp - lowerTemp;
-    if (range > 0)
-    {
-      int bx = 14, bw = 100, by = 55;
-      d->drawRect(bx + x, by + y, bw, 6);
-      float pos = constrain((temperature - lowerTemp) / range, 0.0f, 1.0f);
-      int mx = bx + (int)(pos * (bw - 4));
-      d->fillRect(mx + x, by + y, 4, 6);
-      d->setFont(ArialMT_Plain_10);
-      d->setTextAlignment(TEXT_ALIGN_LEFT);
-      d->drawString(bx + x - 12, by + y - 2, String((int)lowerTemp));
-      d->setTextAlignment(TEXT_ALIGN_RIGHT);
-      d->drawString(bx + bw + x + 14, by + y - 2, String((int)higherTemp));
-    }
+    // Large bar — tall, center of screen
+    int bx = 10, bw = 108, by = 28, bh = 10;
+    d->drawRect(bx + x, by + y, bw, bh);
+    float pos = constrain((temperature - lowerTemp) / range, 0.0f, 1.0f);
+    int mx = bx + (int)(pos * (bw - 6));
+    d->fillRect(mx + x, by + y, 6, bh);
+
+    d->setTextAlignment(TEXT_ALIGN_LEFT);
+    d->drawString(bx + x, by + bh + 4 + y, String((int)lowerTemp));
+    d->setTextAlignment(TEXT_ALIGN_RIGHT);
+    d->drawString(bx + bw + x, by + bh + 4 + y, String((int)higherTemp));
+    d->setTextAlignment(TEXT_ALIGN_CENTER);
+    d->drawString(64 + x, by + bh + 4 + y, String(temperature, 1) + "\xB0" "C");
+  }
+  else
+  {
+    d->drawString(64 + x, 34 + y, "No sensor data");
   }
 }
 
@@ -105,13 +125,13 @@ void frameStatus(OLEDDisplay *d, OLEDDisplayUiState *state, int16_t x, int16_t y
   d->setFont(ArialMT_Plain_10);
   int ly = CONTENT_Y + 2;
   d->drawString(2 + x, ly + y, firebaseConnected ? "Firebase: OK" : "Firebase: --");
-  ly += 13;
+  ly += 10;
   d->drawString(2 + x, ly + y, "Sent: " + String(countDataSentToFireBase));
-  ly += 13;
+  ly += 10;
   unsigned long upSec = millis() / 1000;
   d->drawString(2 + x, ly + y,
                 "Up: " + String(upSec / 3600) + "h " + String((upSec % 3600) / 60) + "m");
-  ly += 13;
+  ly += 10;
   d->drawString(2 + x, ly + y, "Heap: " + String(ESP.getFreeHeap()) + "B");
 }
 
@@ -130,35 +150,36 @@ void frameWifi(OLEDDisplay *d, OLEDDisplayUiState *state, int16_t x, int16_t y)
   d->setFont(ArialMT_Plain_10);
   int ly = CONTENT_Y + 2;
   d->drawString(2 + x, ly + y, "SSID: " + WiFi.SSID());
-  ly += 13;
+  ly += 10;
   d->drawString(2 + x, ly + y, "IP: " + ip);
-  ly += 13;
+  ly += 10;
   d->drawString(2 + x, ly + y, "Host: " + WiFi.hostname());
-  ly += 13;
+  ly += 10;
   d->drawString(2 + x, ly + y, "RSSI: " + String(WiFi.RSSI()) + " dBm");
 }
 
 /** Frame 3: Power supply / battery. */
 void frameBattery(OLEDDisplay *d, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
-  BATTERY_LEVEL = ESP.getVcc();
+  if (millis() - lastVccMs >= 1000) {
+    BATTERY_LEVEL = ESP.getVcc();
+    lastVccMs = millis();
+  }
   float v = BATTERY_LEVEL / 1000.0;
   d->setTextAlignment(TEXT_ALIGN_CENTER);
-  d->setFont(ArialMT_Plain_10);
-  d->drawString(64 + x, CONTENT_Y + 2 + y, "Power Supply");
   d->setFont(ArialMT_Plain_24);
-  d->drawString(64 + x, 26 + y, String(v, 2) + " V");
+  d->drawString(64 + x, 16 + y, String(v, 2) + " V");
   d->setFont(ArialMT_Plain_10);
   if (v > 4.5)
-    d->drawString(64 + x, 52 + y, "USB Powered");
+    d->drawString(64 + x, 42 + y, "USB Powered");
   else if (v < 3.0)
-    d->drawString(64 + x, 52 + y, "LOW BATTERY!");
+    d->drawString(64 + x, 42 + y, "LOW BATTERY!");
   else
-    d->drawString(64 + x, 52 + y, "Battery OK");
+    d->drawString(64 + x, 42 + y, "Battery OK");
 }
 
-FrameCallback uiFrames[] = {frameTemperature, frameStatus, frameWifi, frameBattery};
-const uint8_t uiFrameCount = 4;
+FrameCallback uiFrames[] = {frameTemperature, frameThreshold, frameStatus, frameWifi, frameBattery};
+const uint8_t uiFrameCount = 5;
 
 // ====================================================================
 // OVERLAY — status bar (always visible at top)
