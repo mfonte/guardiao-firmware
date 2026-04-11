@@ -16,31 +16,14 @@ OneWire oneWire(ONE_WIRE_BUS);
 SSD1306Wire display(0x3c, D2, D1);
 OLEDDisplayUi ui(&display);
 
-// --- UI Constants ---
+// --- UI State ---
 #define STATUS_BAR_H 12
 #define CONTENT_Y STATUS_BAR_H
 
-// --- UI State ---
-enum DisplayMode { DMODE_NORMAL, DMODE_ALARM, DMODE_MODAL };
-DisplayMode displayMode = DMODE_NORMAL;
-
-enum AlarmState { ALARM_OFF, ALARM_SOUNDING };
-AlarmState alarmState = ALARM_OFF;
-unsigned long alarmStartMs = 0;
-unsigned long alarmToneMs = 0;
-unsigned int alarmFreq = 2000;
-bool alarmToneOn = false;
-
-float prevTemperature = -127.0;
+float prevTemperature = 0.0;
+bool  prevSensorError = true;
 unsigned long lastVccMs = 0;
 bool firebaseConnected = false;
-
-unsigned long s1PressStart = 0;
-unsigned long s2PressStart = 0;
-bool s1Handled = false;
-bool s2Handled = false;
-
-void openConfigPortal();
 
 // ====================================================================
 // FRAME CALLBACKS (drawn by OLEDDisplayUi)
@@ -53,7 +36,7 @@ void frameTemperature(OLEDDisplay *d, OLEDDisplayUiState *state, int16_t x, int1
   d->setFont(ArialMT_Plain_16);
   d->drawString(64 + x, CONTENT_Y + y, DEVICE_NAME);
 
-  if (temperature == -127.0 || temperature == 888.0)
+  if (sensorError)
   {
     d->setFont(ArialMT_Plain_16);
     d->drawString(64 + x, 34 + y, "Syncing...");
@@ -79,7 +62,7 @@ void frameTemperature(OLEDDisplay *d, OLEDDisplayUiState *state, int16_t x, int1
   // Navigation arrows near pagination bar
   d->drawXbm(2 + x, 55 + y, ICON_SIZE, ICON_SIZE, icon_arrow_left);
 
-  if (prevTemperature != -127.0 && prevTemperature != 888.0)
+  if (!prevSensorError)
   {
     float diff = temperature - prevTemperature;
     const uint8_t *arrow = icon_arrow_right;
@@ -106,7 +89,7 @@ void frameThreshold(OLEDDisplay *d, OLEDDisplayUiState *state, int16_t x, int16_
   }
 
   float range = higherTemp - lowerTemp;
-  if (range > 0 && temperature > -126.0 && temperature < 887.0)
+  if (range > 0 && !sensorError)
   {
     // Large bar — tall, center of screen
     int bx = 10, bw = 108, by = 28, bh = 10;
@@ -272,7 +255,7 @@ void overlayStatusBar(OLEDDisplay *d, OLEDDisplayUiState *state)
     d->drawXbm(118, 2, ICON_SIZE, ICON_SIZE,
                vbat < 3.0 ? icon_battery_low : icon_battery);
   }
-  else if (temperature > -126.0 && temperature < 887.0)
+  else if (!sensorError)
   {
     d->setFont(ArialMT_Plain_10);
     d->setTextAlignment(TEXT_ALIGN_RIGHT);
@@ -310,20 +293,6 @@ void initUIFramework()
 // MODAL SCREENS (bypass UI framework)
 // ====================================================================
 
-void drawAlarmScreen()
-{
-  display.clear();
-  display.setTextAlignment(TEXT_ALIGN_CENTER);
-  display.setFont(ArialMT_Plain_10);
-  display.drawString(64, 2, "! ALARM !");
-  display.drawHorizontalLine(0, 13, 128);
-  display.setFont(ArialMT_Plain_24);
-  display.drawString(64, 18, ALARM_MESSAGE);
-  display.setFont(ArialMT_Plain_10);
-  display.drawString(64, 52, "Press any button to stop");
-  display.display();
-}
-
 void drawBootProgress(const char *label, uint8_t progress)
 {
   display.clear();
@@ -345,18 +314,6 @@ void drawWifiReconnecting()
   display.drawString(64, 10, "Sem WiFi");
   display.setFont(ArialMT_Plain_10);
   display.drawString(64, 38, "Reconectando...");
-  display.display();
-}
-
-void drawHoldProgress(const char *action, uint8_t pct)
-{
-  display.clear();
-  display.setTextAlignment(TEXT_ALIGN_CENTER);
-  display.setFont(ArialMT_Plain_10);
-  display.drawString(64, 4, action);
-  display.drawProgressBar(10, 22, 108, 12, pct);
-  display.drawString(64, 42, pct < 100 ? "Hold..." : "Releasing...");
-  display.drawString(64, 54, "Release to cancel");
   display.display();
 }
 
@@ -397,187 +354,4 @@ void drawWifiNotConfigured(const String &ssid)
   display.setFont(ArialMT_Plain_10);
   display.drawString(64, 42, "using your phone");
   display.display();
-}
-
-// ====================================================================
-// NON-BLOCKING ALARM
-// ====================================================================
-
-void startAlarm()
-{
-  alarmState = ALARM_SOUNDING;
-  alarmStartMs = millis();
-  alarmFreq = 2000;
-  alarmToneOn = false;
-  alarmToneMs = millis();
-  displayMode = DMODE_ALARM;
-  drawAlarmScreen();
-}
-
-bool updateAlarm()
-{
-  if (alarmState != ALARM_SOUNDING)
-    return false;
-
-  if (digitalRead(BUTTON_S1_PIN) == HIGH || digitalRead(BUTTON_S2_PIN) == HIGH)
-  {
-    noTone(BUZZER_PIN);
-    alarmState = ALARM_OFF;
-    displayMode = DMODE_NORMAL;
-    delay(200);
-    return false;
-  }
-
-  if (millis() - alarmStartMs >= 30000)
-  {
-    noTone(BUZZER_PIN);
-    alarmState = ALARM_OFF;
-    displayMode = DMODE_NORMAL;
-    return false;
-  }
-
-  unsigned long el = millis() - alarmToneMs;
-  if (alarmToneOn && el >= 200)
-  {
-    noTone(BUZZER_PIN);
-    alarmToneOn = false;
-    alarmToneMs = millis();
-    alarmFreq = max(500u, alarmFreq - 50u);
-  }
-  else if (!alarmToneOn && el >= 100)
-  {
-    tone(BUZZER_PIN, alarmFreq, 200);
-    alarmToneOn = true;
-    alarmToneMs = millis();
-  }
-
-  return true;
-}
-
-// ====================================================================
-// BUZZER FEEDBACK
-// ====================================================================
-
-void beepConfirm() { tone(BUZZER_PIN, 1000, 50); }
-
-void beepSuccess()
-{
-  tone(BUZZER_PIN, 800, 80);
-  delay(100);
-  tone(BUZZER_PIN, 1200, 80);
-  delay(80);
-  noTone(BUZZER_PIN);
-}
-
-void beepError()
-{
-  for (int i = 0; i < 3; i++)
-  {
-    tone(BUZZER_PIN, 400, 50);
-    delay(80);
-    noTone(BUZZER_PIN);
-    delay(40);
-  }
-}
-
-void beepBoot()
-{
-  tone(BUZZER_PIN, 523, 80);
-  delay(100);
-  tone(BUZZER_PIN, 659, 80);
-  delay(100);
-  tone(BUZZER_PIN, 784, 120);
-  delay(120);
-  noTone(BUZZER_PIN);
-}
-
-// ====================================================================
-// BUTTON HANDLING
-// ====================================================================
-
-void handleButtons()
-{
-  if (alarmState == ALARM_SOUNDING)
-    return;
-
-  bool s1 = digitalRead(BUTTON_S1_PIN) == HIGH;
-  bool s2 = digitalRead(BUTTON_S2_PIN) == HIGH;
-
-  // ---- S1 (previous frame / portal on hold) ----
-  if (s1)
-  {
-    if (s1PressStart == 0)
-    {
-      s1PressStart = millis();
-      s1Handled = false;
-    }
-    unsigned long held = millis() - s1PressStart;
-
-    if (held >= 1000 && held < (unsigned long)BUTTON_S1_HOLD_TIME && !s1Handled)
-    {
-      uint8_t pct = (uint8_t)((held - 1000) * 100UL / (BUTTON_S1_HOLD_TIME - 1000));
-      drawHoldProgress("Open WiFi Portal", pct);
-      displayMode = DMODE_MODAL;
-    }
-    if (held >= (unsigned long)BUTTON_S1_HOLD_TIME && !s1Handled)
-    {
-      s1Handled = true;
-      openConfigPortal();
-    }
-  }
-  else
-  {
-    if (s1PressStart > 0 && !s1Handled)
-    {
-      unsigned long held = millis() - s1PressStart;
-      if (held > 50 && held < 1000)
-      {
-        ui.previousFrame();
-        beepConfirm();
-      }
-      displayMode = DMODE_NORMAL;
-    }
-    s1PressStart = 0;
-    s1Handled = false;
-  }
-
-  // ---- S2 (next frame / factory reset on hold) ----
-  if (s2)
-  {
-    if (s2PressStart == 0)
-    {
-      s2PressStart = millis();
-      s2Handled = false;
-    }
-    unsigned long held = millis() - s2PressStart;
-
-    if (held >= 1000 && held < (unsigned long)BUTTON_S2_HOLD_TIME && !s2Handled)
-    {
-      uint8_t pct = (uint8_t)((held - 1000) * 100UL / (BUTTON_S2_HOLD_TIME - 1000));
-      drawHoldProgress("Factory Reset", pct);
-      displayMode = DMODE_MODAL;
-    }
-    if (held >= (unsigned long)BUTTON_S2_HOLD_TIME && !s2Handled)
-    {
-      s2Handled = true;
-      drawResetDevice();
-      delay(2000);
-      ESP.reset();
-    }
-  }
-  else
-  {
-    if (s2PressStart > 0 && !s2Handled)
-    {
-      unsigned long held = millis() - s2PressStart;
-      if (held > 50 && held < 1000)
-      {
-        ui.nextFrame();
-        beepConfirm();
-      }
-      displayMode = DMODE_NORMAL;
-    }
-    s2PressStart = 0;
-    s2Handled = false;
-  }
 }

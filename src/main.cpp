@@ -11,6 +11,9 @@
 #include "addons/RTDBHelper.h"
 #include <EEPROMFunction.h>
 #include <drawOled.h>
+#include <buzzer.h>
+#include <alarm.h>
+#include <buttons.h>
 #include <NTPClient.h>
 #include <WiFiUdp.h>
 #include <ArduinoJson.h>
@@ -316,8 +319,12 @@ bool sendDataToFireBase()
     json.set(timestampPath.c_str(), timestamp); // int, not String
     json.set(statusPath.c_str(), String("online"));
     // Datalogger: temperature (float) and timestamp (int)
-    json.set(("/datalogger/" + String(timestamp) + dataloggerTempPath).c_str(), temperature);
-    json.set(("/datalogger/" + String(timestamp) + dataloggerTimestampPath).c_str(), timestamp);
+    char dlTempPath[40];
+    char dlTsPath[40];
+    snprintf(dlTempPath, sizeof(dlTempPath), "/datalogger/%lu/temperature", (unsigned long)timestamp);
+    snprintf(dlTsPath, sizeof(dlTsPath), "/datalogger/%lu/timestamp", (unsigned long)timestamp);
+    json.set(dlTempPath, temperature);
+    json.set(dlTsPath, timestamp);
 
     bool writeOk = Firebase.RTDB.updateNode(&fbdo, databasePath.c_str(), &json);
     Serial.printf("Set json... %s\n", writeOk ? "ok" : fbdo.errorReason().c_str());
@@ -384,6 +391,7 @@ void callFirebase()
   }
 
   prevTemperature = temperature;
+  prevSensorError = sensorError;
   temperature = readTemperature();
   firebaseConnected = Firebase.ready();
 
