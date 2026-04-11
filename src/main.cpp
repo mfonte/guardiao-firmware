@@ -1,4 +1,3 @@
-#define ADC_MODE(ADC_VCC)
 #include <Arduino.h>
 #if defined(ESP32)
 #include <WiFi.h>

@@ -46,7 +46,6 @@ String HOST_NAME;     // OTA hostname ("guardiao-<chipId>")
 #define ALARM_MESSAGE "ALARM ON"  // Text shown on OLED during alarm
 
 // ---- Misc ----
-#define ADC_MODE(ADC_VCC)           // Enable VCC measurement via ADC
 #define MIN_VALID_TIMESTAMP 1704067200L  // 2024-01-01 00:00:00 UTC — NTP sanity floor
 
 // ---- Firebase RTDB path fragments (relative to the device node root) ----
