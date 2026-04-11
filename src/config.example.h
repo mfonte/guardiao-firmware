@@ -1,5 +1,5 @@
-// Modelo de configuração local do firmware.
-// Copie para `src/config.h` e preencha com os valores reais do ambiente.
+// Local firmware configuration template.
+// Copy to `src/config.h` and fill in with real environment values.
 
 // Define the maximum sizes for the email and password data.
 const int EMAIL_ADDR = 0;         // Initial address for the email
@@ -35,15 +35,15 @@ String HOST_NAME; // OTA Configuration and Wi-Fi Ap STA
 #define BUZZER_PIN D6             // Buzzer passivo — GPIO12, suporta PWM, sem restrição de boot
 #define BUTTON_S1_PIN D8          // D8 => S1 On TagsApp Board - V2.0
 #define BUTTON_S2_PIN D7          // D7 => S2 On TagsApp Board - V2.0
-#define GET_DATA_INTERVAL 5000L   // Leitura local a cada 5 segundos
-#define BUTTON_S1_HOLD_TIME 5000  // Segurar S1 por 5s abre Captive Portal
-#define BUTTON_S2_HOLD_TIME 10000 // Segurar S2 por 10s reseta o device
+#define GET_DATA_INTERVAL 5000L   // Local sensor read every 5 seconds
+#define BUTTON_S1_HOLD_TIME 5000  // Hold S1 for 5 s to open the Captive Portal
+#define BUTTON_S2_HOLD_TIME 10000 // Hold S2 for 10 s to factory-reset the device
 #define ALARM_MESSAGE "ALARM ON"
 #define ADC_MODE(ADC_VCC)
 #define DEBUG_CODE 1 // Enable (1)/Disable (0) serial debug
 
-// Firebase RTDB — paths relativos à raiz do device node
-String deviceUUIDPath = "/deviceUUID"; // raiz do device (não sob config/)
+// Firebase RTDB — paths relative to the device node root
+String deviceUUIDPath = "/deviceUUID"; // device root (not under config/)
 String deviceNamePath = "/data/deviceName";
 String tempPath = "/data/temperature";
 String timestampPath = "/data/timestamp";
@@ -54,20 +54,20 @@ String configPath = "/config";
 String thresholdPath = "/_threshold";
 String alertPath = "/_alert";
 
-// Variáveis de threshold (lidas do Firebase)
+// Threshold variables (read from Firebase on each sync cycle)
 float higherTemp = 80.0;
 float lowerTemp = -80.0;
 String thresholdMode = "both"; // "both" | "above" | "below" | "none"
 
-// Variáveis de medições programadas (lidas do Firebase)
+// Scheduled readings variables (read from Firebase)
 bool scheduledReadingsEnabled = false;
 int scheduledIntervalMinutes = 5; // padrão: 5 minutos
 int scheduledStartHour = 0;
 
-// Variável de tempo para envio ao Firebase (em ms, atualizada dinamicamente)
+// Firebase send interval (ms, updated dynamically from remote config)
 unsigned long timerDelay = 300000L; // padrão: 5 minutos
 
-// Variável para guardar o epoch time atual
+// Variable to hold the current epoch timestamp
 int timestamp = 0;
 int watchDogCount = 0;
 
