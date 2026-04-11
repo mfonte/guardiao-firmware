@@ -383,6 +383,19 @@ void callFirebase()
   temperature = readTemperature();
   firebaseConnected = Firebase.ready();
 
+  // Guard: skip Firebase entirely if WiFi layer is down — avoids SSL crash inside lib
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.printf("[Firebase] WiFi not connected (status=%d), skipping cycle\n", WiFi.status());
+    firebaseFailCount++;
+    firebaseSkipRemaining = (uint8_t)min(1u << firebaseFailCount, 16u);
+    float currentTemp = readTemperature();
+    if (currentTemp != 888.0 && currentTemp > -126.0) {
+      uint32_t currentTs = (uint32_t)getTime();
+      if (currentTs > MIN_VALID_TIMESTAMP) enqueuePendingReading(currentTemp, currentTs);
+    }
+    return;
+  }
+
   if (Firebase.ready() && (millis() - sendDataPrevMillis > timerDelay || sendDataPrevMillis == 0))
   {
     sendDataToFireBase();
@@ -529,6 +542,10 @@ void setup()
 
   Firebase.reconnectNetwork(true);
   fbdo.setResponseSize(4096);
+  fbdo.setBSSLBufferSize(4096, 1024);  // Rx/Tx — reduce SSL stack pressure on ESP8266
+  config.timeout.serverResponse    = 8000;   // ms — abandon SSL if server silent for 8s
+  config.timeout.socketConnection  = 8000;   // ms — TCP connect timeout
+  config.timeout.wifiReconnect     = 5000;   // ms — WiFi reconnect window
   config.token_status_callback = tokenStatusCallback;
   config.max_token_generation_retry = 5;
   Firebase.begin(&config, &auth);
@@ -617,7 +634,17 @@ void loop()
   }
   else if (displayMode == DMODE_NORMAL)
   {
-    if (WiFi.status() == WL_CONNECTED) {
+    static bool lastWifiConnected = true;
+    bool wifiNow = (WiFi.status() == WL_CONNECTED);
+    if (wifiNow != lastWifiConnected) {
+      if (wifiNow) {
+        Serial.printf("[OLED] WiFi reconectado — voltando para ui.update() (status=%d)\n", WiFi.status());
+      } else {
+        Serial.printf("[OLED] WiFi desconectado — exibindo drawWifiReconnecting() (status=%d)\n", WiFi.status());
+      }
+      lastWifiConnected = wifiNow;
+    }
+    if (wifiNow) {
       ui.update();
     } else {
       drawWifiReconnecting();
