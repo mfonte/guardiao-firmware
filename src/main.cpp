@@ -80,22 +80,18 @@ void firebaseInit()
  */
 bool setupWiFiManager(WiFiManager &wifiManager)
 {
-  USER_EMAIL = readStringFromEEPROM(EMAIL_ADDR);
-  USER_PASSWORD = readStringFromEEPROM(PASS_ADDR);
-  DEVICE_NAME = readStringFromEEPROM(DEVICE_NAME_ADDR);
-
   STA_NAME = WiFi.hostname();
   Serial.println(STA_NAME);
 
-  static WiFiManagerParameter custom_email("Email", "Enter your email", USER_EMAIL.c_str(), 40);
-  static WiFiManagerParameter custom_password("Password", "Enter your password", USER_PASSWORD.c_str(), 40, "type='password'");
-  static WiFiManagerParameter custom_device_name("Device name", "Enter the device name", DEVICE_NAME.c_str(), 40);
+  WiFiManagerParameter custom_email("Email", "Enter your email", USER_EMAIL.c_str(), 40);
+  WiFiManagerParameter custom_password("Password", "Enter your password", USER_PASSWORD.c_str(), 40, "type='password'");
+  WiFiManagerParameter custom_device_name("Device name", "Enter the device name", DEVICE_NAME.c_str(), 40);
 
   wifiManager.addParameter(&custom_email);
   wifiManager.addParameter(&custom_password);
   wifiManager.addParameter(&custom_device_name);
 
-  wifiManager.setSaveConfigCallback([]()
+  wifiManager.setSaveConfigCallback([&custom_email, &custom_password, &custom_device_name]()
                                     {
     newEmail = custom_email.getValue();
     newPassword = custom_password.getValue();
@@ -129,7 +125,8 @@ void initWifiManager()
     Serial.println("Failed to setup WiFi Manager");
     return;
   }
-  if (!wifiManager.autoConnect("IoTemp Setup"))
+  String portalSSID = "IoTemp-" + String(ESP.getChipId() & 0xFFFF, HEX);
+  if (!wifiManager.autoConnect(portalSSID.c_str()))
   {
     Serial.println("Failed to connect and hit timeout");
     return;
@@ -445,12 +442,16 @@ void setup()
   Serial.print("ESP Chip Id: ");
   Serial.println(DEVICE_UUID);
 
+  // Build unique AP SSID using last 4 hex digits of chip ID
+  String portalSSID = "IoTemp-" + String(ESP.getChipId() & 0xFFFF, HEX);
+
   if (USER_EMAIL == "" || USER_PASSWORD == "" || DEVICE_NAME == "")
   {
     drawWifiNotConfigured();
-    Serial.println("Empty E-mail or Password. Starting WiFiManager Captive Portal.");
+    Serial.println("Empty credentials. Starting WiFiManager Captive Portal.");
     WiFiManager wifiManager;
     wifiManager.setDebugOutput(true);
+    wifiManager.setConfigPortalTimeout(120);
     wifiManager.setConnectTimeout(60);
     wifiManager.setCleanConnect(true);
     if (!setupWiFiManager(wifiManager))
@@ -458,7 +459,13 @@ void setup()
       Serial.println("Failed to setup WiFi Manager");
       ESP.restart();
     }
-    wifiManager.startConfigPortal("IoTemp Setup");
+    if (!wifiManager.startConfigPortal(portalSSID.c_str()))
+    {
+      Serial.println("Config portal timed out without configuration. Restarting.");
+      drawResetDevice();
+      delay(2000);
+      ESP.restart();
+    }
   }
   else
   {
@@ -549,14 +556,19 @@ void checkButtons()
 /**
  * Launches the WiFiManager captive portal if credentials are missing, or
  * when S1 is held for BUTTON_S1_HOLD_TIME milliseconds.
+ * Portal times out after 120 seconds and restarts the device.
  */
 void setupNewWM()
 {
+  String portalSSID = "IoTemp-" + String(ESP.getChipId() & 0xFFFF, HEX);
+
+  // If credentials are missing, open portal immediately
   if (USER_EMAIL == "" || USER_PASSWORD == "")
   {
-    Serial.println("Empty E-mail or User. Restarting Captive Portal.");
+    Serial.println("Empty credentials. Opening Captive Portal.");
     WiFiManager wifiManager;
     wifiManager.setDebugOutput(true);
+    wifiManager.setConfigPortalTimeout(120);
     wifiManager.setConnectTimeout(60);
     wifiManager.setCleanConnect(true);
     if (!setupWiFiManager(wifiManager))
@@ -564,10 +576,17 @@ void setupNewWM()
       Serial.println("Failed to re-setup WiFi Manager");
       return;
     }
-    STA_NAME = "IoTemp Setup - " + STA_NAME;
     drawWifiNotConfigured();
-    wifiManager.startConfigPortal(STA_NAME.c_str());
+    if (!wifiManager.startConfigPortal(portalSSID.c_str()))
+    {
+      Serial.println("Portal timed out. Restarting.");
+      drawResetDevice();
+      delay(2000);
+      ESP.restart();
+    }
   }
+
+  // S1 long-press: open portal on demand
   if (digitalRead(BUTTON_S1_PIN) == HIGH)
   {
     if (buttonS1PressedTime == 0)
@@ -578,6 +597,7 @@ void setupNewWM()
     {
       WiFiManager wifiManager;
       wifiManager.setDebugOutput(true);
+      wifiManager.setConfigPortalTimeout(120);
       wifiManager.setConnectTimeout(60);
       wifiManager.setCleanConnect(true);
       if (!setupWiFiManager(wifiManager))
@@ -585,9 +605,8 @@ void setupNewWM()
         Serial.println("Failed to re-setup WiFi Manager");
         return;
       }
-      STA_NAME = "IoTemp Setup - " + STA_NAME;
       drawWifiNotConfigured();
-      wifiManager.startConfigPortal(STA_NAME.c_str());
+      wifiManager.startConfigPortal(portalSSID.c_str());
       ESP.reset();
       buttonS1PressedTime = 0;
     }
