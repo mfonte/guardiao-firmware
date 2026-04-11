@@ -61,13 +61,23 @@ void frameTemperature(OLEDDisplay *d, OLEDDisplayUiState *state, int16_t x, int1
   }
 
   String tempStr = String(temperature, 1);
+  // Measure widths to center the number+unit group horizontally
   d->setFont(ArialMT_Plain_24);
-  d->setTextAlignment(TEXT_ALIGN_RIGHT);
-  d->drawString(95 + x, 30 + y, tempStr);
+  int numW = d->getStringWidth(tempStr);
+  d->setFont(ArialMT_Plain_10);
+  int unitW = d->getStringWidth("\xC2\xB0" "C");
+  int groupX = 64 - (numW + 2 + unitW) / 2;
+
+  d->setFont(ArialMT_Plain_24);
+  d->setTextAlignment(TEXT_ALIGN_LEFT);
+  d->drawString(groupX + x, 28 + y, tempStr);
 
   d->setFont(ArialMT_Plain_10);
   d->setTextAlignment(TEXT_ALIGN_LEFT);
-  d->drawString(97 + x, 30 + y, "\xB0" "C");
+  d->drawString(groupX + numW + 2 + x, 28 + y, "\xC2\xB0" "C");
+
+  // Navigation arrows near pagination bar
+  d->drawXbm(2 + x, 55 + y, ICON_SIZE, ICON_SIZE, icon_arrow_left);
 
   if (prevTemperature != -127.0 && prevTemperature != 888.0)
   {
@@ -77,7 +87,7 @@ void frameTemperature(OLEDDisplay *d, OLEDDisplayUiState *state, int16_t x, int1
       arrow = icon_arrow_up;
     else if (diff < -0.3)
       arrow = icon_arrow_down;
-    d->drawXbm(4 + x, 36 + y, ICON_SIZE, ICON_SIZE, arrow);
+    d->drawXbm(118 + x, 55 + y, ICON_SIZE, ICON_SIZE, arrow);
   }
 }
 
@@ -110,12 +120,16 @@ void frameThreshold(OLEDDisplay *d, OLEDDisplayUiState *state, int16_t x, int16_
     d->setTextAlignment(TEXT_ALIGN_RIGHT);
     d->drawString(bx + bw + x, by + bh + 4 + y, String((int)higherTemp));
     d->setTextAlignment(TEXT_ALIGN_CENTER);
-    d->drawString(64 + x, by + bh + 4 + y, String(temperature, 1) + "\xB0" "C");
+    d->drawString(64 + x, by + bh + 4 + y, String(temperature, 1) + "\xC2\xB0" "C");
   }
   else
   {
     d->drawString(64 + x, 34 + y, "No sensor data");
   }
+
+  // Navigation arrows
+  d->drawXbm(2 + x, 55 + y, ICON_SIZE, ICON_SIZE, icon_arrow_left);
+  d->drawXbm(118 + x, 55 + y, ICON_SIZE, ICON_SIZE, icon_arrow_right);
 }
 
 /** Frame 1: Device status. */
@@ -133,6 +147,10 @@ void frameStatus(OLEDDisplay *d, OLEDDisplayUiState *state, int16_t x, int16_t y
                 "Up: " + String(upSec / 3600) + "h " + String((upSec % 3600) / 60) + "m");
   ly += 10;
   d->drawString(2 + x, ly + y, "Heap: " + String(ESP.getFreeHeap()) + "B");
+
+  // Navigation arrows
+  d->drawXbm(2 + x, 55 + y, ICON_SIZE, ICON_SIZE, icon_arrow_left);
+  d->drawXbm(118 + x, 55 + y, ICON_SIZE, ICON_SIZE, icon_arrow_right);
 }
 
 /** Frame 2: WiFi details. */
@@ -156,6 +174,10 @@ void frameWifi(OLEDDisplay *d, OLEDDisplayUiState *state, int16_t x, int16_t y)
   d->drawString(2 + x, ly + y, "Host: " + WiFi.hostname());
   ly += 10;
   d->drawString(2 + x, ly + y, "RSSI: " + String(WiFi.RSSI()) + " dBm");
+
+  // Navigation arrows
+  d->drawXbm(2 + x, 55 + y, ICON_SIZE, ICON_SIZE, icon_arrow_left);
+  d->drawXbm(118 + x, 55 + y, ICON_SIZE, ICON_SIZE, icon_arrow_right);
 }
 
 /** Frame 3: Power supply / battery. */
@@ -176,10 +198,46 @@ void frameBattery(OLEDDisplay *d, OLEDDisplayUiState *state, int16_t x, int16_t 
     d->drawString(64 + x, 42 + y, "LOW BATTERY!");
   else
     d->drawString(64 + x, 42 + y, "Battery OK");
+
+  // Navigation arrows
+  d->drawXbm(2 + x, 55 + y, ICON_SIZE, ICON_SIZE, icon_arrow_left);
+  d->drawXbm(118 + x, 55 + y, ICON_SIZE, ICON_SIZE, icon_arrow_right);
 }
 
-FrameCallback uiFrames[] = {frameTemperature, frameThreshold, frameStatus, frameWifi, frameBattery};
-const uint8_t uiFrameCount = 5;
+/** Frame N: Clock — HH:MM:SS + date from NTP. */
+void frameClock(OLEDDisplay *d, OLEDDisplayUiState *state, int16_t x, int16_t y)
+{
+  unsigned long epoch = timestamp;
+  if (epoch <= MIN_VALID_TIMESTAMP)
+  {
+    d->setTextAlignment(TEXT_ALIGN_CENTER);
+    d->setFont(ArialMT_Plain_16);
+    d->drawString(64 + x, 30 + y, "Syncing...");
+    return;
+  }
+
+  epoch += (long)TIMEZONE_OFFSET_SEC;
+  time_t t = (time_t)epoch;
+  struct tm *ti = gmtime(&t);
+
+  char timeBuf[9];
+  char dateBuf[24];
+  snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d:%02d", ti->tm_hour, ti->tm_min, ti->tm_sec);
+  snprintf(dateBuf, sizeof(dateBuf), "%04u-%02u-%02u", (uint16_t)(ti->tm_year + 1900), (uint8_t)(ti->tm_mon + 1), (uint8_t)ti->tm_mday);
+
+  d->setTextAlignment(TEXT_ALIGN_CENTER);
+  d->setFont(ArialMT_Plain_24);
+  d->drawString(64 + x, 18 + y, timeBuf);
+  d->setFont(ArialMT_Plain_10);
+  d->drawString(64 + x, 46 + y, dateBuf);
+
+  // Navigation arrows
+  d->drawXbm(2 + x, 55 + y, ICON_SIZE, ICON_SIZE, icon_arrow_left);
+  d->drawXbm(118 + x, 55 + y, ICON_SIZE, ICON_SIZE, icon_arrow_right);
+}
+
+FrameCallback uiFrames[] = {frameTemperature, frameThreshold, frameClock, frameStatus, frameWifi, frameBattery};
+const uint8_t uiFrameCount = 6;
 
 // ====================================================================
 // OVERLAY — status bar (always visible at top)
@@ -207,11 +265,18 @@ void overlayStatusBar(OLEDDisplay *d, OLEDDisplayUiState *state)
     d->drawXbm(ix, iy, ICON_SIZE, ICON_SIZE, icon_bell);
   }
 
-  if (state->currentFrame != 0 && temperature > -126.0 && temperature < 887.0)
+  if (state->currentFrame == 0)
+  {
+    // Temperature frame: show battery state icon in top-right
+    float vbat = BATTERY_LEVEL / 1000.0;
+    d->drawXbm(118, 2, ICON_SIZE, ICON_SIZE,
+               vbat < 3.0 ? icon_battery_low : icon_battery);
+  }
+  else if (temperature > -126.0 && temperature < 887.0)
   {
     d->setFont(ArialMT_Plain_10);
     d->setTextAlignment(TEXT_ALIGN_RIGHT);
-    d->drawString(126, 0, String(temperature, 1) + "\xB0");
+    d->drawString(126, 0, String(temperature, 1) + "\xC2\xB0");
   }
 }
 
@@ -236,6 +301,7 @@ void initUIFramework()
   ui.setFrames(uiFrames, uiFrameCount);
   ui.setOverlays(uiOverlays, uiOverlayCount);
   ui.setIndicatorPosition(BOTTOM);
+  ui.setIndicatorDirection(LEFT_RIGHT);
   ui.init();
   display.flipScreenVertically(); // re-apply after ui.init() resets orientation
 }
@@ -289,6 +355,22 @@ void drawResetDevice()
   display.setTextAlignment(TEXT_ALIGN_CENTER);
   display.drawString(64, 5, "Restarting...");
   display.drawString(64, 30, DEVICE_NAME);
+  display.display();
+}
+
+/**
+ * Displays a named boot error on the OLED before restarting.
+ * @param reason Short description of the failure (max ~20 chars for readability)
+ */
+void drawBootError(const char *reason)
+{
+  display.clear();
+  display.setTextAlignment(TEXT_ALIGN_CENTER);
+  display.setFont(ArialMT_Plain_16);
+  display.drawString(64, 4, "Erro de Boot");
+  display.setFont(ArialMT_Plain_10);
+  display.drawString(64, 26, reason);
+  display.drawString(64, 44, "Reiniciando...");
   display.display();
 }
 

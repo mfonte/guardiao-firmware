@@ -443,14 +443,16 @@ void setup()
     wifiManager.setCleanConnect(true);
     if (!setupWiFiManager(wifiManager))
     {
-      Serial.println("Failed to setup WiFi Manager");
+      Serial.println("[Boot] Failed to setup WiFi Manager");
+      drawBootError("WiFi config falhou");
+      delay(3000);
       ESP.restart();
     }
     if (!wifiManager.startConfigPortal(portalSSID.c_str()))
     {
-      Serial.println("Config portal timed out without configuration. Restarting.");
-      drawResetDevice();
-      delay(2000);
+      Serial.println("[Boot] Config portal timed out.");
+      drawBootError("Portal timeout");
+      delay(3000);
       ESP.restart();
     }
   }
@@ -491,10 +493,19 @@ void setup()
 
   drawBootProgress("Authenticating...", 80);
   Serial.println("Getting User UID");
-  while ((auth.token.uid) == "")
+  int authRetryCount = 0;
+  while ((auth.token.uid) == "" && authRetryCount < 30)
   {
     Serial.print('.');
     delay(1000);
+    authRetryCount++;
+  }
+  if ((auth.token.uid) == "")
+  {
+    Serial.println("\n[Auth] Firebase auth timeout after 30s. Restarting.");
+    drawBootError("Firebase auth falhou");
+    delay(3000);
+    ESP.restart();
   }
   uid = auth.token.uid.c_str();
   Serial.print("User UID: ");
