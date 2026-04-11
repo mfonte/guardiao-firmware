@@ -8,7 +8,6 @@
 #include <SSD1306Wire.h>
 #include <OLEDDisplayUi.h>
 #include <OneWire.h>
-#include <EEPROMFunction.h>
 #include <config.h>
 #include <icons.h>
 
