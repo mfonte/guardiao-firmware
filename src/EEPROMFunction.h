@@ -106,9 +106,12 @@ void drainOnePendingReading() {
 
   // Enviar a entrada mais antiga (index 0)
   FirebaseJson drainJson;
-  String drainPath = "/datalogger/" + String(pendingQueue[0].timestamp);
-  drainJson.set((drainPath + "/temperature").c_str(), pendingQueue[0].temperature);
-  drainJson.set((drainPath + "/timestamp").c_str(),   (int)pendingQueue[0].timestamp);
+  char drainTempPath[48];
+  char drainTsPath[48];
+  snprintf(drainTempPath, sizeof(drainTempPath), "/datalogger/%lu/temperature", (unsigned long)pendingQueue[0].timestamp);
+  snprintf(drainTsPath,   sizeof(drainTsPath),   "/datalogger/%lu/timestamp",   (unsigned long)pendingQueue[0].timestamp);
+  drainJson.set(drainTempPath, pendingQueue[0].temperature);
+  drainJson.set(drainTsPath,   (int)pendingQueue[0].timestamp);
 
   if (Firebase.RTDB.updateNode(&fbdo, databasePath.c_str(), &drainJson)) {
     // Sucesso: remover da fila

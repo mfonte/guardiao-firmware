@@ -736,8 +736,9 @@ void sendBootMessage()
   json.set("d/rst", resetReason);
   json.set("d/heap", ESP.getFreeHeap());
   json.set("d/wifi", WiFi.RSSI());
-  String bootPath = "/UsersData/" + uid + "/devices/" + DEVICE_LDID + "/boot";
-  Serial.printf("Boot msg: %s\n", Firebase.RTDB.updateNode(&fbdo, bootPath.c_str(), &json) ? "ok" : fbdo.errorReason().c_str());
+  char bootPath[128];
+  snprintf(bootPath, sizeof(bootPath), "/UsersData/%s/devices/%s/boot", uid.c_str(), DEVICE_LDID.c_str());
+  Serial.printf("Boot msg: %s\n", Firebase.RTDB.updateNode(&fbdo, bootPath, &json) ? "ok" : fbdo.errorReason().c_str());
   json.clear();
 }
 
@@ -754,8 +755,9 @@ void sendHeartbeat()
   json.set("d/st", calculateStatusBitmap());
   json.set("d/heap", ESP.getFreeHeap());
   json.set("d/wifi", WiFi.RSSI());
-  String heartbeatPath = "/UsersData/" + uid + "/devices/" + DEVICE_LDID + "/heartbeat";
-  Firebase.RTDB.updateNode(&fbdo, heartbeatPath.c_str(), &json);
+  char heartbeatPath[128];
+  snprintf(heartbeatPath, sizeof(heartbeatPath), "/UsersData/%s/devices/%s/heartbeat", uid.c_str(), DEVICE_LDID.c_str());
+  Firebase.RTDB.updateNode(&fbdo, heartbeatPath, &json);
   json.clear();
   lastHeartbeatMillis = millis();
 }
