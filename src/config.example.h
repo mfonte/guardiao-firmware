@@ -46,6 +46,7 @@ String HOST_NAME;     // OTA hostname ("guardiao-<chipId>")
 #define ALARM_MESSAGE "ALARM ON"  // Text shown on OLED during alarm
 
 // ---- Misc ----
+#define TIMEZONE_OFFSET_SEC  -10800L  // UTC offset in seconds (e.g. -3h = -10800 for BRT)
 #define MIN_VALID_TIMESTAMP 1704067200L  // 2024-01-01 00:00:00 UTC — NTP sanity floor
 
 // ---- Firebase RTDB path fragments (relative to the device node root) ----

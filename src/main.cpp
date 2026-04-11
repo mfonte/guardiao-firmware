@@ -207,8 +207,8 @@ void getDeviceConfigurations()
 
 /**
  * Reads temperature from the DS18B20 sensor.
- * Returns 888.0 for disconnect/short-circuit sentinel values (-127 or 85).
- * @return Temperature in Celsius, or 888.0 on sensor error.
+ * Sets global sensorError flag on disconnect/short-circuit (-127 or 85).
+ * @return Temperature in Celsius (value undefined when sensorError is true).
  */
 float readTemperature()
 {
@@ -217,7 +217,11 @@ float readTemperature()
   float tempC = sensors.getTempCByIndex(0);
   if (tempC == -127.0 || tempC == 85.0)
   {
-    tempC = 888.0;
+    sensorError = true;
+  }
+  else
+  {
+    sensorError = false;
   }
   Serial.println("Leaving readTemperature");
   return tempC;
@@ -232,7 +236,7 @@ void checkThresholdAlert()
 {
   Serial.println("Entering checkThresholdAlert");
 
-  if (temperature == 888.0 || temperature == -127.0)
+  if (sensorError)
   {
     Serial.println("Sensor returned invalid reading!");
     countMessageSending = 0;
@@ -301,7 +305,7 @@ bool sendDataToFireBase()
   Serial.print("time: ");
   Serial.println(timestamp);
 
-  if (temperature != 888.0 && timestamp > MIN_VALID_TIMESTAMP)
+  if (!sensorError && timestamp > MIN_VALID_TIMESTAMP)
   {
     Serial.print("Temperature: ");
     Serial.println(temperature);
@@ -361,7 +365,7 @@ void callFirebase()
   if (firebaseSkipRemaining > 0) {
     firebaseSkipRemaining--;
     float currentTemp = readTemperature();
-    if (currentTemp != 888.0 && currentTemp > -126.0) {
+    if (!sensorError) {
       uint32_t currentTs = (uint32_t)getTime();
       if (currentTs > MIN_VALID_TIMESTAMP) {
         enqueuePendingReading(currentTemp, currentTs);
@@ -389,7 +393,7 @@ void callFirebase()
     firebaseFailCount++;
     firebaseSkipRemaining = (uint8_t)min(1u << firebaseFailCount, 16u);
     float currentTemp = readTemperature();
-    if (currentTemp != 888.0 && currentTemp > -126.0) {
+    if (!sensorError) {
       uint32_t currentTs = (uint32_t)getTime();
       if (currentTs > MIN_VALID_TIMESTAMP) enqueuePendingReading(currentTemp, currentTs);
     }
@@ -700,7 +704,7 @@ void generateOrLoadLDID()
 uint8_t calculateStatusBitmap()
 {
   uint8_t st = 0x01; // always online (bit 0)
-  if (temperature == 888.0 || temperature == -127.0)
+  if (sensorError)
     st |= 0x04; // error reading
   bool highAlert = (thresholdMode == "both" || thresholdMode == "upperOnly") && temperature > higherTemp;
   bool lowAlert = (thresholdMode == "both" || thresholdMode == "lowerOnly") && temperature < lowerTemp;

@@ -37,3 +37,16 @@ static const uint8_t icon_arrow_down[] PROGMEM = {
 // Trend stable: right arrow
 static const uint8_t icon_arrow_right[] PROGMEM = {
     0x00, 0x08, 0x10, 0x3F, 0x3F, 0x10, 0x08, 0x00};
+
+// Navigation hint: left arrow
+static const uint8_t icon_arrow_left[] PROGMEM = {
+    0x00, 0x10, 0x08, 0xFC, 0xFC, 0x08, 0x10, 0x00};
+
+// Battery: outer shell with terminal nub
+// Battery horizontal: 6px body + 2px nub on right, filled=OK / sliver=low
+static const uint8_t icon_battery[] PROGMEM = {
+    0x00, 0x3F, 0x6F, 0x6F, 0x6F, 0x3F, 0x00, 0x00};
+
+// Battery low horizontal: shell only + 1px fill on left
+static const uint8_t icon_battery_low[] PROGMEM = {
+    0x00, 0x3F, 0x61, 0x61, 0x61, 0x3F, 0x00, 0x00};
