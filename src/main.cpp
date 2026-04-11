@@ -617,7 +617,11 @@ void loop()
   }
   else if (displayMode == DMODE_NORMAL)
   {
-    ui.update();
+    if (WiFi.status() == WL_CONNECTED) {
+      ui.update();
+    } else {
+      drawWifiReconnecting();
+    }
   }
   // DMODE_MODAL: display managed by handleButtons (hold progress)
 

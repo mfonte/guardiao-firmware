@@ -336,6 +336,18 @@ void drawBootProgress(const char *label, uint8_t progress)
   display.display();
 }
 
+
+void drawWifiReconnecting()
+{
+  display.clear();
+  display.setTextAlignment(TEXT_ALIGN_CENTER);
+  display.setFont(ArialMT_Plain_16);
+  display.drawString(64, 10, "Sem WiFi");
+  display.setFont(ArialMT_Plain_10);
+  display.drawString(64, 38, "Reconectando...");
+  display.display();
+}
+
 void drawHoldProgress(const char *action, uint8_t pct)
 {
   display.clear();
