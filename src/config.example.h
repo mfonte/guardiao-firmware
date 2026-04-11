@@ -1,3 +1,4 @@
+#pragma once
 // Local firmware configuration template.
 // Copy to `src/config.h` and fill in with real environment values.
 
@@ -41,6 +42,7 @@ String HOST_NAME; // OTA Configuration and Wi-Fi Ap STA
 #define ALARM_MESSAGE "ALARM ON"
 #define ADC_MODE(ADC_VCC)
 #define DEBUG_CODE 1 // Enable (1)/Disable (0) serial debug
+#define MIN_VALID_TIMESTAMP 1704067200L // 2024-01-01 00:00:00 UTC — sanity check for NTP
 
 // Firebase RTDB — paths relative to the device node root
 String deviceUUIDPath = "/deviceUUID"; // device root (not under config/)
@@ -67,7 +69,7 @@ int scheduledStartHour = 0;
 unsigned long timerDelay = 300000L; // default: 5 minutes
 
 // Variable to hold the current epoch timestamp
-int timestamp = 0;
+unsigned long timestamp = 0;
 int watchDogCount = 0;
 
 int countMessageSending = 0;

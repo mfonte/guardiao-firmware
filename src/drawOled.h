@@ -1,3 +1,4 @@
+#pragma once
 #include <SSD1306Wire.h>
 #include <OneWire.h>
 #include <EEPROMFunction.h>
@@ -55,7 +56,6 @@ void drawFindingWifi()
 }
 
 /** Shows the connected WiFi SSID, IP address, and hostname on the OLED. */
-/* This function draws the WiFi SSID and IP address on OLED Display */
 void drawWifiDetail()
 {
   String wifiSSID = WiFi.SSID();
@@ -128,7 +128,6 @@ void drawWaitingForTemperature()
 }
 
 /** Displays the ALARM_MESSAGE string centred on the OLED during an alarm event. */
-/* This function draws "ALARM ON" on OLED Display */
 void drawAlarm()
 {
   clearDisplay(); // clear the display
@@ -171,6 +170,6 @@ void drawBatteryLevel()
   display.setFont(ArialMT_Plain_16);
   display.drawString(62, 5, "Battery");
   display.setFont(ArialMT_Plain_24);
-  display.drawString(62, 30, String(BATTERY_LEVEL) + " V");
+  display.drawString(62, 30, String(BATTERY_LEVEL / 1000.0, 2) + " V");
   display.display();
 }

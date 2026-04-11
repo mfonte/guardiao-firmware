@@ -38,7 +38,6 @@ NTPClient timeClient(ntpUDP, "pool.ntp.org");
 SimpleTimer timer;
 
 Ticker wdtReset;
-Ticker alarmInterval;
 
 // Database main path (updated in setup with user UID)
 String databasePath;
@@ -49,7 +48,7 @@ String uid;
 FirebaseJson json;
 JsonDocument doc;
 
-// Configurar o modo ADC para ler a tensão de alimentação
+// Configure ADC mode to read supply voltage
 ADC_MODE(ADC_VCC);
 
 // Forward declarations — Protocol v2 functions defined after loop()
@@ -67,28 +66,11 @@ void firebaseInit()
   Serial.println("Entering firebaseInit");
   json.clear();
   json.add(deviceNamePath, String(DEVICE_NAME));
-  json.add(deviceUUIDPath, String(DEVICE_UUID)); // raiz do device, não config/
+  json.add(deviceUUIDPath, String(DEVICE_UUID)); // device root, not under config/
   json.add(statusPath, String("online"));
   Serial.printf("Set json... %s\n", Firebase.RTDB.updateNode(&fbdo, databasePath.c_str(), &json) ? "ok" : fbdo.errorReason().c_str());
   json.clear();
   Serial.println("Leaving firebaseInit");
-}
-
-/**
- * Persists WiFiManager form values (email, password, device name) to EEPROM.
- * Invoked by WiFiManager after the user submits the captive portal form.
- */
-void saveConfigCallback()
-{
-  Serial.println("Saving configuration");
-  USER_EMAIL = newEmail;
-  USER_PASSWORD = newPassword;
-  DEVICE_NAME = newDeviceName;
-  writeStringToEEPROM(EMAIL_ADDR, USER_EMAIL);
-  writeStringToEEPROM(PASS_ADDR, USER_PASSWORD);
-  writeStringToEEPROM(DEVICE_NAME_ADDR, DEVICE_NAME);
-  EEPROM.commit();
-  Serial.println("Configuration saved to EEPROM.");
 }
 
 /**
@@ -308,11 +290,13 @@ void checkThresholdAlert()
   if (overHigh)
   {
     Serial.println("High temperature threshold exceeded!");
+    countMessageSending++;
     sendAlarm();
   }
   else if (underLow)
   {
     Serial.println("Low temperature threshold exceeded!");
+    countMessageSending++;
     sendAlarm();
   }
   else
@@ -356,7 +340,7 @@ void sendDataToFireBase()
   Serial.print("time: ");
   Serial.println(timestamp);
 
-  if (temperature != 888.0 && timestamp > 1712843539)
+  if (temperature != 888.0 && timestamp > MIN_VALID_TIMESTAMP)
   {
     Serial.print("Temperature: ");
     Serial.println(temperature);
@@ -365,8 +349,8 @@ void sendDataToFireBase()
 
     json.clear();
     json.set(deviceNamePath.c_str(), String(DEVICE_NAME));
-    json.set(tempPath.c_str(), temperature);    // float, não String
-    json.set(timestampPath.c_str(), timestamp); // int, não String
+    json.set(tempPath.c_str(), temperature);    // float, not String
+    json.set(timestampPath.c_str(), timestamp); // int, not String
     json.set(statusPath.c_str(), String("online"));
     // Datalogger: temperature (float) and timestamp (int)
     json.set(("/datalogger/" + String(timestamp) + dataloggerTempPath).c_str(), temperature);
@@ -453,12 +437,11 @@ void setup()
   USER_PASSWORD = readStringFromEEPROM(PASS_ADDR);
   DEVICE_NAME = readStringFromEEPROM(DEVICE_NAME_ADDR);
 
-  Serial.println("SETUP: Reading user email and password from EEPROM");
-  Serial.println(USER_EMAIL);
-  Serial.println(USER_PASSWORD);
-  Serial.println(DEVICE_NAME);
+  Serial.println("SETUP: Reading credentials from EEPROM");
+  Serial.printf("Email: %s  Device: %s\n", USER_EMAIL.c_str(), DEVICE_NAME.c_str());
 
   DEVICE_UUID = String(ESP.getChipId());
+  HOST_NAME = "guardiao-" + DEVICE_UUID;
   Serial.print("ESP Chip Id: ");
   Serial.println(DEVICE_UUID);
 
@@ -555,7 +538,7 @@ void checkButtons()
   else if (digitalRead(BUTTON_S1_PIN) == HIGH)
   {
     Serial.println("Button S1 pressed");
-    BATTERY_LEVEL = (ESP.getVcc() / 1.2) / 10000;
+    BATTERY_LEVEL = ESP.getVcc();
     drawBatteryLevel();
     delay(300);
     Serial.println(watchDogCount);

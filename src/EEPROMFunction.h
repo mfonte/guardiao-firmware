@@ -1,3 +1,4 @@
+#pragma once
 #include <EEPROM.h>
 
 const int EEPROM_SIZE = 512; // MAX EEPROM SIZE
@@ -12,8 +13,8 @@ const int EEPROM_SIZE = 512; // MAX EEPROM SIZE
 String readStringFromEEPROM(int addrOffset)
 {
   int newStrLen = EEPROM.read(addrOffset);
-  if (newStrLen < 0 || newStrLen >= EEPROM_SIZE - addrOffset - 1)
-  { // Check for invalid length
+  if (newStrLen == 0xFF || newStrLen >= EEPROM_SIZE - addrOffset - 1)
+  { // 0xFF = virgin EEPROM; also reject overflow
     return String("");
   }
   char data[newStrLen + 1];
