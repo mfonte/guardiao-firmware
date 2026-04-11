@@ -6,11 +6,11 @@ Firmware embarcado para os dispositivos da plataforma **Guardião IoT**. Respons
 
 ## Hardware Suportado
 
-| Versão | MCU | Sensores | Comunicação |
-|--------|-----|----------|-------------|
-| A | ESP-12E | DS18B20 (temp) | Wi-Fi HTTP |
-| B | ESP32-S/S3 | DS18B20 + extras | Wi-Fi HTTP/MQTT |
-| C | ESP32-S/S3 + LoRa | DS18B20 + extras | Wi-Fi + LoRa |
+| Versão | MCU               | Sensores         | Comunicação     |
+| ------ | ----------------- | ---------------- | --------------- |
+| A      | ESP-12E           | DS18B20 (temp)   | Wi-Fi HTTP      |
+| B      | ESP32-S/S3        | DS18B20 + extras | Wi-Fi HTTP/MQTT |
+| C      | ESP32-S/S3 + LoRa | DS18B20 + extras | Wi-Fi + LoRa    |
 
 ---
 
@@ -26,26 +26,29 @@ Firmware embarcado para os dispositivos da plataforma **Guardião IoT**. Respons
 ## Configuração
 
 1. Clone o repositório:
+
 ```bash
 git clone https://github.com/seu-usuario/guardiao-firmware.git
 cd guardiao-firmware
 ```
 
 2. Copie o arquivo de configuração:
+
 ```bash
-cp include/config.example.h include/config.h
+cp src/config.example.h src/config.h
 ```
 
-3. Edite `include/config.h` com suas credenciais:
+3. Edite `src/config.h` com suas credenciais e parâmetros locais:
+
 ```cpp
-#define WIFI_SSID "sua-rede"
-#define WIFI_PASSWORD "sua-senha"
-#define FIREBASE_HOST "seu-projeto.firebaseio.com"
-#define FIREBASE_AUTH "seu-token"
-#define DEVICE_ID "id-unico-do-dispositivo"
+#define API_KEY "SUA_FIREBASE_API_KEY"
+#define DATABASE_URL "https://seu-projeto-default-rtdb.firebaseio.com/"
 ```
+
+> `src/config.h` é local ao ambiente e não deve ser commitado.
 
 4. Compile e faça upload:
+
 ```bash
 # PlatformIO
 pio run --target upload
@@ -61,11 +64,12 @@ pio run --target upload
 ```
 guardiao-firmware/
     ├── src/
-    │   └── main.cpp          # Código principal
+    │   ├── main.cpp          # Código principal
+    │   ├── config.example.h  # Template de configuração
+    │   └── config.h          # Configuração local (ignorada pelo git)
     ├── lib/                  # Bibliotecas locais
     ├── include/
-    │   ├── config.example.h  # Template de configuração
-    │   └── config.h          # Suas credenciais (não comitar)
+    │   └── README
     ├── platformio.ini        # Configuração PlatformIO
     ├── .gitignore
     ├── CHANGELOG.md

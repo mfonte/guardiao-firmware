@@ -1,5 +1,7 @@
 # Credenciais e configurações locais
 include/config.h
+src/config.h
+src/config.local.h
 secrets.h
 
 # PlatformIO
@@ -20,6 +22,14 @@ secrets.h
 # VS Code
 .vscode/
 !.vscode/extensions.json
+
+# IDEs e arquivos temporários
+.idea/
+*.iml
+*.swp
+*.swo
+*.tmp
+*.orig
 
 # GSD e SDD
 .planning/
