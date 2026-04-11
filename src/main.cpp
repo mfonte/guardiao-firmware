@@ -228,37 +228,6 @@ float readTemperature()
 }
 
 /**
- * Plays a descending alarm tone (2000 → 500 Hz) via the passive buzzer for 30 seconds.
- * Blocks execution during playback, then restores the temperature screen.
- */
-void alarmSound()
-{
-  Serial.println("Entering alarmSound");
-  unsigned long startTime = millis();
-  unsigned int freq = 2000;
-
-  while (millis() - startTime < 30000)
-  {
-    tone(BUZZER_PIN, freq, 200);  // play for 200 ms
-    delay(300);                   // pause 100 ms
-    freq = max(500u, freq - 50u); // gradually reduce frequency
-    yield();
-  }
-  noTone(BUZZER_PIN);
-  drawTemperature();
-  Serial.println("Leaving alarmSound");
-}
-
-/**
- * Triggers the alarm sequence: draws the alarm screen then plays the alarm tone.
- */
-void sendAlarm()
-{
-  drawAlarm();
-  alarmSound();
-}
-
-/**
  * Evaluates the current temperature against configured thresholds and fires
  * sendAlarm() if a violation is detected. Respects the thresholdMode setting
  * ("both" | "upperOnly" | "lowerOnly" | "none").
@@ -288,13 +257,13 @@ void checkThresholdAlert()
   {
     Serial.println("High temperature threshold exceeded!");
     countMessageSending++;
-    sendAlarm();
+    startAlarm();
   }
   else if (underLow)
   {
     Serial.println("Low temperature threshold exceeded!");
     countMessageSending++;
-    sendAlarm();
+    startAlarm();
   }
   else
   {
@@ -342,8 +311,6 @@ void sendDataToFireBase()
     Serial.print("Temperature: ");
     Serial.println(temperature);
 
-    drawTemperature();
-
     json.clear();
     json.set(deviceNamePath.c_str(), String(DEVICE_NAME));
     json.set(tempPath.c_str(), temperature);    // float, not String
@@ -359,7 +326,6 @@ void sendDataToFireBase()
   }
   else
   {
-    drawWaitingForTemperature();
     Serial.println("Invalid temperature and/or invalid timestamp.");
   }
 
@@ -376,8 +342,9 @@ void callFirebase()
 {
   Serial.println("Entering callFirebase");
 
+  prevTemperature = temperature;
   temperature = readTemperature();
-  drawTemperature();
+  firebaseConnected = Firebase.ready();
 
   if (Firebase.ready() && (millis() - sendDataPrevMillis > timerDelay || sendDataPrevMillis == 0))
   {
@@ -390,12 +357,12 @@ void callFirebase()
     ESP.reset();
   }
 
-  if (countMessageSending == 0 && temperature > higherTemp)
+  if (alarmState == ALARM_OFF && countMessageSending == 0 && temperature > higherTemp)
   {
     countMessageSending += 1;
     checkThresholdAlert();
   }
-  else if (countMessageSending == 0 && temperature < lowerTemp)
+  else if (alarmState == ALARM_OFF && countMessageSending == 0 && temperature < lowerTemp)
   {
     countMessageSending += 1;
     checkThresholdAlert();
@@ -425,8 +392,9 @@ void setup()
   pinMode(LED_BUILTIN, OUTPUT);
   boardLedInitialization();
 
-  display.init();
-  display.flipScreenVertically();
+  // Initialize display early for boot progress screens
+  initDisplay();
+  drawBootProgress("Starting...", 0);
 
   EEPROM.begin(EEPROM_SIZE);
 
@@ -442,12 +410,14 @@ void setup()
   Serial.print("ESP Chip Id: ");
   Serial.println(DEVICE_UUID);
 
+  drawBootProgress("WiFi...", 20);
+
   // Build unique AP SSID using last 4 hex digits of chip ID
   String portalSSID = "IoTemp-" + String(ESP.getChipId() & 0xFFFF, HEX);
 
   if (USER_EMAIL == "" || USER_PASSWORD == "" || DEVICE_NAME == "")
   {
-    drawWifiNotConfigured();
+    drawWifiNotConfigured(portalSSID);
     Serial.println("Empty credentials. Starting WiFiManager Captive Portal.");
     WiFiManager wifiManager;
     wifiManager.setDebugOutput(true);
@@ -470,10 +440,10 @@ void setup()
   else
   {
     initWifiManager();
-    drawWifiDetail();
   }
 
   WIFI_SSID = WiFi.SSID();
+  drawBootProgress("NTP...", 40);
 
   timer.setInterval(GET_DATA_INTERVAL, callFirebase);
 
@@ -490,6 +460,8 @@ void setup()
   sensors.getAddress(sensorAddress, 0);
   sensors.setResolution(sensorAddress, 12);
 
+  drawBootProgress("Firebase...", 60);
+
   config.api_key = API_KEY;
   auth.user.email = USER_EMAIL;
   auth.user.password = USER_PASSWORD;
@@ -501,6 +473,7 @@ void setup()
   config.max_token_generation_retry = 5;
   Firebase.begin(&config, &auth);
 
+  drawBootProgress("Authenticating...", 80);
   Serial.println("Getting User UID");
   while ((auth.token.uid) == "")
   {
@@ -525,129 +498,54 @@ void setup()
   sendBootMessage();
 
   OTAsetup();
+
+  drawBootProgress("Ready!", 100);
+  delay(400);
+
+  // Initialize UI framework (frames, overlays, indicators)
+  initUIFramework();
+  beepBoot();
 }
 
 /**
- * Polls S1 and S2 buttons on each loop iteration.
- * S2 short-press: shows WiFi details and refreshes config.
- * S1 short-press: shows battery voltage.
+ * Opens the WiFiManager captive portal on demand (called from button hold).
  */
-void checkButtons()
-{
-  if (digitalRead(BUTTON_S2_PIN) == HIGH)
-  {
-    Serial.println("Button S2 pressed");
-    drawWifiDetail();
-    delay(300);
-    getDeviceConfigurations();
-    Serial.println(watchDogCount);
-  }
-  else if (digitalRead(BUTTON_S1_PIN) == HIGH)
-  {
-    Serial.println("Button S1 pressed");
-    BATTERY_LEVEL = ESP.getVcc();
-    drawBatteryLevel();
-    delay(300);
-    Serial.println(watchDogCount);
-  }
-  delay(100);
-}
-
-/**
- * Launches the WiFiManager captive portal if credentials are missing, or
- * when S1 is held for BUTTON_S1_HOLD_TIME milliseconds.
- * Portal times out after 120 seconds and restarts the device.
- */
-void setupNewWM()
+void openConfigPortal()
 {
   String portalSSID = "IoTemp-" + String(ESP.getChipId() & 0xFFFF, HEX);
-
-  // If credentials are missing, open portal immediately
-  if (USER_EMAIL == "" || USER_PASSWORD == "")
+  WiFiManager wifiManager;
+  wifiManager.setDebugOutput(true);
+  wifiManager.setConfigPortalTimeout(120);
+  wifiManager.setConnectTimeout(60);
+  wifiManager.setCleanConnect(true);
+  if (!setupWiFiManager(wifiManager))
   {
-    Serial.println("Empty credentials. Opening Captive Portal.");
-    WiFiManager wifiManager;
-    wifiManager.setDebugOutput(true);
-    wifiManager.setConfigPortalTimeout(120);
-    wifiManager.setConnectTimeout(60);
-    wifiManager.setCleanConnect(true);
-    if (!setupWiFiManager(wifiManager))
-    {
-      Serial.println("Failed to re-setup WiFi Manager");
-      return;
-    }
-    drawWifiNotConfigured();
-    if (!wifiManager.startConfigPortal(portalSSID.c_str()))
-    {
-      Serial.println("Portal timed out. Restarting.");
-      drawResetDevice();
-      delay(2000);
-      ESP.restart();
-    }
+    Serial.println("Failed to setup WiFi Manager");
+    beepError();
+    return;
   }
-
-  // S1 long-press: open portal on demand
-  if (digitalRead(BUTTON_S1_PIN) == HIGH)
-  {
-    if (buttonS1PressedTime == 0)
-    {
-      buttonS1PressedTime = millis();
-    }
-    else if (millis() - buttonS1PressedTime >= BUTTON_S1_HOLD_TIME)
-    {
-      WiFiManager wifiManager;
-      wifiManager.setDebugOutput(true);
-      wifiManager.setConfigPortalTimeout(120);
-      wifiManager.setConnectTimeout(60);
-      wifiManager.setCleanConnect(true);
-      if (!setupWiFiManager(wifiManager))
-      {
-        Serial.println("Failed to re-setup WiFi Manager");
-        return;
-      }
-      drawWifiNotConfigured();
-      wifiManager.startConfigPortal(portalSSID.c_str());
-      ESP.reset();
-      buttonS1PressedTime = 0;
-    }
-  }
-  else
-  {
-    buttonS1PressedTime = 0;
-  }
-}
-
-/**
- * Performs a hard reset when S2 is held for BUTTON_S2_HOLD_TIME milliseconds.
- */
-void resetDevice()
-{
-  if (digitalRead(BUTTON_S2_PIN) == HIGH)
-  {
-    if (buttonS2PressedTime == 0)
-    {
-      buttonS2PressedTime = millis();
-    }
-    else if (millis() - buttonS2PressedTime >= BUTTON_S2_HOLD_TIME)
-    {
-      drawResetDevice();
-      delay(2000);
-      ESP.reset();
-      buttonS2PressedTime = 0;
-    }
-  }
-  else
-  {
-    buttonS2PressedTime = 0;
-  }
+  drawWifiNotConfigured(portalSSID);
+  beepConfirm();
+  wifiManager.startConfigPortal(portalSSID.c_str());
+  beepSuccess();
+  ESP.reset();
 }
 
 void loop()
 {
   timer.run();
-  setupNewWM();
-  resetDevice();
-  checkButtons();
+
+  handleButtons();
+
+  if (updateAlarm())
+  {
+    // Alarm active — display managed by alarm screen
+  }
+  else if (displayMode == DMODE_NORMAL)
+  {
+    ui.update();
+  }
+  // DMODE_MODAL: display managed by handleButtons (hold progress)
 
   // Protocol v2: periodic heartbeat
   if (millis() - lastHeartbeatMillis > HEARTBEAT_INTERVAL)
