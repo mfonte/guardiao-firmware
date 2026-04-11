@@ -6,14 +6,14 @@
 #endif
 #include <WiFiManager.h>
 #include <DallasTemperature.h>
+#include <Firebase_ESP_Client.h>
+#include "addons/TokenHelper.h"
+#include "addons/RTDBHelper.h"
 #include <EEPROMFunction.h>
 #include <drawOled.h>
 #include <NTPClient.h>
 #include <WiFiUdp.h>
 #include <ArduinoJson.h>
-#include <Firebase_ESP_Client.h>
-#include "addons/TokenHelper.h"
-#include "addons/RTDBHelper.h"
 #include <Ticker.h>
 #include <OTAUpdate.h>
 
@@ -291,12 +291,11 @@ void ISRWatchDog()
  * pushes temperature + datalogger entry to RTDB. Triggers threshold check
  * after a successful write.
  */
-void sendDataToFireBase()
+bool sendDataToFireBase()
 {
   Serial.println("Entering sendDataToFireBase");
   sendDataPrevMillis = millis();
-
-  getDeviceConfigurations();
+  // getDeviceConfigurations() movido para timer próprio em loop() (per D-15/D-16)
 
   timestamp = (int)getTime();
   Serial.print("time: ");
@@ -315,10 +314,29 @@ void sendDataToFireBase()
     // Datalogger: temperature (float) and timestamp (int)
     json.set(("/datalogger/" + String(timestamp) + dataloggerTempPath).c_str(), temperature);
     json.set(("/datalogger/" + String(timestamp) + dataloggerTimestampPath).c_str(), timestamp);
-    Serial.printf("Set json... %s\n", Firebase.RTDB.updateNode(&fbdo, databasePath.c_str(), &json) ? "ok" : fbdo.errorReason().c_str());
+
+    bool writeOk = Firebase.RTDB.updateNode(&fbdo, databasePath.c_str(), &json);
+    Serial.printf("Set json... %s\n", writeOk ? "ok" : fbdo.errorReason().c_str());
     json.clear();
 
-    checkThresholdAlert();
+    if (writeOk) {
+      firebaseFailCount     = 0;
+      firebaseSkipRemaining = 0;
+      drainOnePendingReading();
+      checkThresholdAlert();
+      countDataSentToFireBase += 1;
+      Serial.println("Leaving sendDataToFireBase");
+      return true;
+    } else {
+      firebaseFailCount++;
+      firebaseSkipRemaining = (uint8_t)min(1u << firebaseFailCount, 16u);
+      enqueuePendingReading(temperature, (uint32_t)timestamp);
+      Serial.printf("[Firebase] Write failed (fail #%u), backing off %u cycles\n",
+                    firebaseFailCount, firebaseSkipRemaining);
+      countDataSentToFireBase += 1;
+      Serial.println("Leaving sendDataToFireBase");
+      return false;
+    }
   }
   else
   {
@@ -327,6 +345,7 @@ void sendDataToFireBase()
 
   countDataSentToFireBase += 1;
   Serial.println("Leaving sendDataToFireBase");
+  return false;
 }
 
 /**
@@ -337,6 +356,28 @@ void sendDataToFireBase()
 void callFirebase()
 {
   Serial.println("Entering callFirebase");
+
+  // Backoff guard: pular ciclo se ainda em período de espera (per D-03)
+  if (firebaseSkipRemaining > 0) {
+    firebaseSkipRemaining--;
+    float currentTemp = readTemperature();
+    if (currentTemp != 888.0 && currentTemp > -126.0) {
+      uint32_t currentTs = (uint32_t)getTime();
+      if (currentTs > MIN_VALID_TIMESTAMP) {
+        enqueuePendingReading(currentTemp, currentTs);
+      }
+    }
+    Serial.printf("[Firebase] Backoff: %u cycles remaining\n", firebaseSkipRemaining);
+    return;
+  }
+
+  // Final safety cap: se max failures atingido, resetar (per D-04)
+  if (firebaseFailCount >= 5) {
+    Serial.println("[Firebase] Max failures reached. Resetting device.");
+    drawResetDevice();
+    delay(2000);
+    ESP.reset();
+  }
 
   prevTemperature = temperature;
   temperature = readTemperature();
@@ -414,6 +455,7 @@ void setup()
   drawBootProgress("Starting...", 0);
 
   EEPROM.begin(EEPROM_SIZE);
+  loadPendingQueue();  // Restaurar leituras pendentes da EEPROM (per D-09)
 
   USER_EMAIL = readStringFromEEPROM(EMAIL_ADDR);
   USER_PASSWORD = readStringFromEEPROM(PASS_ADDR);
@@ -508,6 +550,7 @@ void setup()
     ESP.restart();
   }
   uid = auth.token.uid.c_str();
+
   Serial.print("User UID: ");
   Serial.println(uid);
 
@@ -582,6 +625,13 @@ void loop()
   if (millis() - lastHeartbeatMillis > HEARTBEAT_INTERVAL)
   {
     sendHeartbeat();
+  }
+
+  // Config fetch separado do ciclo de temperatura (per D-15/D-16)
+  if (millis() - configFetchPrevMillis > CONFIG_FETCH_INTERVAL || configFetchPrevMillis == 0)
+  {
+    configFetchPrevMillis = millis();
+    getDeviceConfigurations();
   }
 
   if (watchDogCount > 0) {
