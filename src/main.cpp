@@ -16,7 +16,6 @@
 #include "addons/TokenHelper.h"
 #include "addons/RTDBHelper.h"
 #include <Ticker.h>
-#include <SimpleTimer.h>
 #include <OTAUpdate.h>
 
 // Define Firebase objects
@@ -32,8 +31,8 @@ DeviceAddress sensorAddress;
 WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP, "pool.ntp.org");
 
-// Initialize the timer to check temperature thresholds
-SimpleTimer timer;
+// millis-based timer for periodic callFirebase()
+unsigned long lastFirebaseCallMs = 0;
 
 Ticker wdtReset;
 
@@ -443,7 +442,6 @@ void setup()
   WIFI_SSID = WiFi.SSID();
   drawBootProgress("NTP...", 40);
 
-  timer.setInterval(GET_DATA_INTERVAL, callFirebase);
 
   wdtReset.attach(1, ISRWatchDog);
 
@@ -531,7 +529,11 @@ void openConfigPortal()
 
 void loop()
 {
-  timer.run();
+  if (millis() - lastFirebaseCallMs >= GET_DATA_INTERVAL)
+  {
+    lastFirebaseCallMs = millis();
+    callFirebase();
+  }
 
   handleButtons();
 
