@@ -81,7 +81,7 @@ bool setupWiFiManager(WiFiManager &wifiManager)
 
   WiFiManagerParameter custom_email("Email", "Enter your email", USER_EMAIL.c_str(), 40);
   WiFiManagerParameter custom_password("Password", "Enter your password", USER_PASSWORD.c_str(), 40, "type='password'");
-  WiFiManagerParameter custom_device_name("Device name", "Enter the device name", DEVICE_NAME.c_str(), 40);
+  WiFiManagerParameter custom_device_name("DeviceName", "Enter the device name", DEVICE_NAME.c_str(), 40);
 
   wifiManager.addParameter(&custom_email);
   wifiManager.addParameter(&custom_password);
@@ -121,7 +121,7 @@ void initWifiManager()
     Serial.println("Failed to setup WiFi Manager");
     return;
   }
-  String portalSSID = "IoTemp-" + String(ESP.getChipId() & 0xFFFF, HEX);
+  String portalSSID = "Guardiao-" + String(ESP.getChipId() & 0xFFFF, HEX);
   if (!wifiManager.autoConnect(portalSSID.c_str()))
   {
     Serial.println("Failed to connect and hit timeout");
@@ -277,13 +277,13 @@ void checkThresholdAlert()
 void ISRWatchDog()
 {
   watchDogCount++;
-  if (watchDogCount == 80)
+  if (watchDogCount >= 80)
   {
     Serial.flush();
     Serial.end();
+    wdtFired = true;
     ESP.restart();
   }
-  Serial.println(watchDogCount);
 }
 
 /**
@@ -348,9 +348,30 @@ void callFirebase()
   }
   else if (!Firebase.ready() && (millis() - sendDataPrevMillis > timerDelay || sendDataPrevMillis == 0))
   {
-    drawResetDevice();
-    delay(4000);
-    ESP.reset();
+    Serial.println("[WiFi] Firebase not ready. Attempting WiFi reconnect...");
+    bool reconnected = false;
+    for (int attempt = 0; attempt < 3; attempt++)
+    {
+      drawBootProgress("Reconnecting...", 0);
+      WiFi.reconnect();
+      delay(2000);
+      if (WiFi.status() == WL_CONNECTED)
+      {
+        reconnected = true;
+        Serial.printf("[WiFi] Reconnected on attempt %d\n", attempt + 1);
+        break;
+      }
+      Serial.printf("[WiFi] Attempt %d failed, status=%d\n", attempt + 1, WiFi.status());
+    }
+
+    if (!reconnected)
+    {
+      Serial.println("[WiFi] All reconnect attempts failed. Resetting.");
+      drawResetDevice();
+      delay(2000);
+      ESP.reset();
+    }
+    // Se reconectou, Firebase irá reconectar automaticamente na próxima chamada.
   }
 
   if (alarmState == ALARM_OFF && countMessageSending == 0 && temperature > higherTemp)
@@ -409,7 +430,7 @@ void setup()
   drawBootProgress("WiFi...", 20);
 
   // Build unique AP SSID using last 4 hex digits of chip ID
-  String portalSSID = "IoTemp-" + String(ESP.getChipId() & 0xFFFF, HEX);
+  String portalSSID = "Guardiao-" + String(ESP.getChipId() & 0xFFFF, HEX);
 
   if (USER_EMAIL == "" || USER_PASSWORD == "" || DEVICE_NAME == "")
   {
@@ -507,7 +528,7 @@ void setup()
  */
 void openConfigPortal()
 {
-  String portalSSID = "IoTemp-" + String(ESP.getChipId() & 0xFFFF, HEX);
+  String portalSSID = "Guardiao-" + String(ESP.getChipId() & 0xFFFF, HEX);
   WiFiManager wifiManager;
   wifiManager.setDebugOutput(true);
   wifiManager.setConfigPortalTimeout(120);
@@ -552,6 +573,9 @@ void loop()
     sendHeartbeat();
   }
 
+  if (watchDogCount > 0) {
+    Serial.printf("[WDT] loop reset, count was %u\n", watchDogCount);
+  }
   watchDogCount = 0;
   ArduinoOTA.handle();
   yield();
