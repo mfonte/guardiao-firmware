@@ -19,6 +19,7 @@
 #include <ArduinoJson.h>
 #include <Ticker.h>
 #include <OTAUpdate.h>
+#include <logic.h>
 
 // Define Firebase objects
 FirebaseData fbdo;
@@ -52,7 +53,6 @@ ADC_MODE(ADC_VCC);
 
 // Forward declarations — Protocol v2 functions defined after loop()
 void generateOrLoadLDID();
-uint8_t calculateStatusBitmap();
 void sendBootMessage();
 void sendHeartbeat();
 
@@ -238,31 +238,24 @@ float readTemperature()
 void checkThresholdAlert()
 {
   Serial.println("Entering checkThresholdAlert");
-
-  if (sensorError)
+  int result = evaluateThreshold();
+  if (result == -2)
   {
     Serial.println("Sensor returned invalid reading!");
     countMessageSending = 0;
-    return;
   }
-
-  if (thresholdMode == "none")
+  else if (result == -3)
   {
     Serial.println("ThresholdMode=none: alarm disabled.");
     countMessageSending = 0;
-    return;
   }
-
-  bool overHigh = (thresholdMode == "both" || thresholdMode == "upperOnly") && temperature > higherTemp;
-  bool underLow = (thresholdMode == "both" || thresholdMode == "lowerOnly") && temperature < lowerTemp;
-
-  if (overHigh)
+  else if (result == 1)
   {
     Serial.println("High temperature threshold exceeded!");
     countMessageSending++;
     startAlarm();
   }
-  else if (underLow)
+  else if (result == -1)
   {
     Serial.println("Low temperature threshold exceeded!");
     countMessageSending++;
@@ -273,7 +266,6 @@ void checkThresholdAlert()
     Serial.println("Temperature within limits.");
     countMessageSending = 0;
   }
-
   Serial.println("Leaving checkThresholdAlert");
 }
 
@@ -330,15 +322,18 @@ bool sendDataToFireBase()
     Serial.printf("Set json... %s\n", writeOk ? "ok" : fbdo.errorReason().c_str());
     json.clear();
 
-    if (writeOk) {
-      firebaseFailCount     = 0;
+    if (writeOk)
+    {
+      firebaseFailCount = 0;
       firebaseSkipRemaining = 0;
       drainOnePendingReading();
       checkThresholdAlert();
       countDataSentToFireBase += 1;
       Serial.println("Leaving sendDataToFireBase");
       return true;
-    } else {
+    }
+    else
+    {
       firebaseFailCount++;
       firebaseSkipRemaining = (uint8_t)min(1u << firebaseFailCount, 16u);
       enqueuePendingReading(temperature, (uint32_t)timestamp);
@@ -369,12 +364,15 @@ void callFirebase()
   Serial.println("Entering callFirebase");
 
   // Backoff guard: pular ciclo se ainda em período de espera (per D-03)
-  if (firebaseSkipRemaining > 0) {
+  if (firebaseSkipRemaining > 0)
+  {
     firebaseSkipRemaining--;
     float currentTemp = readTemperature();
-    if (!sensorError) {
+    if (!sensorError)
+    {
       uint32_t currentTs = (uint32_t)getTime();
-      if (currentTs > MIN_VALID_TIMESTAMP) {
+      if (currentTs > MIN_VALID_TIMESTAMP)
+      {
         enqueuePendingReading(currentTemp, currentTs);
       }
     }
@@ -383,7 +381,8 @@ void callFirebase()
   }
 
   // Final safety cap: se max failures atingido, resetar (per D-04)
-  if (firebaseFailCount >= 5) {
+  if (firebaseFailCount >= 5)
+  {
     Serial.println("[Firebase] Max failures reached. Resetting device.");
     drawResetDevice();
     delay(2000);
@@ -396,14 +395,17 @@ void callFirebase()
   firebaseConnected = Firebase.ready();
 
   // Guard: skip Firebase entirely if WiFi layer is down — avoids SSL crash inside lib
-  if (WiFi.status() != WL_CONNECTED) {
+  if (WiFi.status() != WL_CONNECTED)
+  {
     Serial.printf("[Firebase] WiFi not connected (status=%d), skipping cycle\n", WiFi.status());
     firebaseFailCount++;
     firebaseSkipRemaining = (uint8_t)min(1u << firebaseFailCount, 16u);
     float currentTemp = readTemperature();
-    if (!sensorError) {
+    if (!sensorError)
+    {
       uint32_t currentTs = (uint32_t)getTime();
-      if (currentTs > MIN_VALID_TIMESTAMP) enqueuePendingReading(currentTemp, currentTs);
+      if (currentTs > MIN_VALID_TIMESTAMP)
+        enqueuePendingReading(currentTemp, currentTs);
     }
     return;
   }
@@ -480,7 +482,7 @@ void setup()
   drawBootProgress("Starting...", 0);
 
   EEPROM.begin(EEPROM_SIZE);
-  loadPendingQueue();  // Restaurar leituras pendentes da EEPROM (per D-09)
+  loadPendingQueue(); // Restaurar leituras pendentes da EEPROM (per D-09)
 
   USER_EMAIL = readStringFromEEPROM(EMAIL_ADDR);
   USER_PASSWORD = readStringFromEEPROM(PASS_ADDR);
@@ -531,7 +533,6 @@ void setup()
   WIFI_SSID = WiFi.SSID();
   drawBootProgress("NTP...", 40);
 
-
   wdtReset.attach(1, ISRWatchDog);
 
   timeClient.begin();
@@ -554,10 +555,10 @@ void setup()
 
   Firebase.reconnectNetwork(true);
   fbdo.setResponseSize(4096);
-  fbdo.setBSSLBufferSize(4096, 1024);  // Rx/Tx — reduce SSL stack pressure on ESP8266
-  config.timeout.serverResponse    = 8000;   // ms — abandon SSL if server silent for 8s
-  config.timeout.socketConnection  = 8000;   // ms — TCP connect timeout
-  config.timeout.wifiReconnect     = 5000;   // ms — WiFi reconnect window
+  fbdo.setBSSLBufferSize(4096, 1024);     // Rx/Tx — reduce SSL stack pressure on ESP8266
+  config.timeout.serverResponse = 8000;   // ms — abandon SSL if server silent for 8s
+  config.timeout.socketConnection = 8000; // ms — TCP connect timeout
+  config.timeout.wifiReconnect = 5000;    // ms — WiFi reconnect window
   config.token_status_callback = tokenStatusCallback;
   config.max_token_generation_retry = 5;
   Firebase.begin(&config, &auth);
@@ -648,17 +649,24 @@ void loop()
   {
     static bool lastWifiConnected = true;
     bool wifiNow = (WiFi.status() == WL_CONNECTED);
-    if (wifiNow != lastWifiConnected) {
-      if (wifiNow) {
+    if (wifiNow != lastWifiConnected)
+    {
+      if (wifiNow)
+      {
         Serial.printf("[OLED] WiFi reconectado — voltando para ui.update() (status=%d)\n", WiFi.status());
-      } else {
+      }
+      else
+      {
         Serial.printf("[OLED] WiFi desconectado — exibindo drawWifiReconnecting() (status=%d)\n", WiFi.status());
       }
       lastWifiConnected = wifiNow;
     }
-    if (wifiNow) {
+    if (wifiNow)
+    {
       ui.update();
-    } else {
+    }
+    else
+    {
       drawWifiReconnecting();
     }
   }
@@ -677,7 +685,8 @@ void loop()
     getDeviceConfigurations();
   }
 
-  if (watchDogCount > 0) {
+  if (watchDogCount > 0)
+  {
     Serial.printf("[WDT] loop reset, count was %u\n", watchDogCount);
   }
   watchDogCount = 0;
@@ -703,22 +712,6 @@ void generateOrLoadLDID()
   {
     Serial.println("LDID loaded: " + DEVICE_LDID);
   }
-}
-
-/**
- * Builds a status bitmap for protocol v2 heartbeat messages.
- * bit 0: online, bit 2: sensor read error, bit 4: threshold alert active.
- */
-uint8_t calculateStatusBitmap()
-{
-  uint8_t st = 0x01; // always online (bit 0)
-  if (sensorError)
-    st |= 0x04; // error reading
-  bool highAlert = (thresholdMode == "both" || thresholdMode == "upperOnly") && temperature > higherTemp;
-  bool lowAlert = (thresholdMode == "both" || thresholdMode == "lowerOnly") && temperature < lowerTemp;
-  if (highAlert || lowAlert)
-    st |= 0x10; // alert
-  return st;
 }
 
 /**
