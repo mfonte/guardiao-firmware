@@ -37,6 +37,8 @@ NTPClient timeClient(ntpUDP, "pool.ntp.org");
 // millis-based timer for periodic callFirebase()
 unsigned long lastFirebaseCallMs = 0;
 
+// ntpAnchorEpoch/ntpAnchorMillis declared in drawOled.h (shared UI state)
+
 Ticker wdtReset;
 
 // Database main path (updated in setup with user UID)
@@ -55,6 +57,7 @@ ADC_MODE(ADC_VCC);
 void generateOrLoadLDID();
 void sendBootMessage();
 void sendHeartbeat();
+unsigned long getTime();
 
 /**
  * Writes initial device identity and online status to Firebase RTDB.
@@ -62,74 +65,111 @@ void sendHeartbeat();
  */
 void firebaseInit()
 {
-  Serial.println("Entering firebaseInit");
+  // Single PATCH: identity + status + boot message combined
+  // ESP8266 has ~24KB heap — minimize SSL calls to avoid exhaustion
   json.clear();
-  json.add(deviceNamePath, String(DEVICE_NAME));
-  json.add(deviceUUIDPath, String(DEVICE_UUID)); // device root, not under config/
+  json.add(deviceUUIDPath, String(DEVICE_UUID));
   json.add(statusPath, String("online"));
-  Serial.printf("Set json... %s\n", Firebase.RTDB.updateNode(&fbdo, databasePath.c_str(), &json) ? "ok" : fbdo.errorReason().c_str());
+  // Boot message fields (merged to avoid a second SSL call)
+  json.add("boot/v", (int)2);
+  json.add("boot/m", String("B"));
+  json.add("boot/ts", (int)getTime());
+  json.add("boot/d/uuid", DEVICE_UUID);
+  json.add("boot/d/fw", String(FIRMWARE_VERSION));
+  json.add("boot/d/rst", (int)resetReason);
+  json.add("boot/d/heap", (int)ESP.getFreeHeap());
+  json.add("boot/d/wifi", (int)WiFi.RSSI());
+
+  yield();
+  bool ok = Firebase.RTDB.updateNode(&fbdo, databasePath.c_str(), &json);
+  LOG("[BOOT] fw=%s heap=%u wifi=%s rssi=%d uid=%.8s ldid=%s — PATCH %s",
+      FIRMWARE_VERSION, ESP.getFreeHeap(), WIFI_SSID.c_str(), WiFi.RSSI(),
+      uid.c_str(), DEVICE_LDID.c_str(), ok ? "ok" : fbdo.errorReason().c_str());
   json.clear();
-  Serial.println("Leaving firebaseInit");
+
+  // Tear down SSL session completely — ESP8266 can only handle one at a time
+  fbdo.stopWiFiClient();
+  yield();
 }
 
 /**
- * Configures WiFiManager with custom parameters (email, password, device name)
- * read from EEPROM and registers the save-config callback.
- * @return true on success.
+ * Runs the WiFiManager portal. All WiFiManagerParameter objects are declared
+ * in the same scope as WiFiManager so lambda captures and addParameter()
+ * pointers remain valid during the blocking portal call.
+ *
+ * Capturing references to parameters declared in a called function (the old
+ * setupWiFiManager pattern) caused Exception 2 (InstructionFetchProhibited)
+ * when the portal rendered the network list and tried to call the callback.
+ *
+ * @param blocking  true  → startConfigPortal (first-time / forced reset)
+ *                  false → autoConnect       (normal reconnect)
  */
-bool setupWiFiManager(WiFiManager &wifiManager)
+void runWiFiPortal(bool blocking)
 {
   STA_NAME = WiFi.hostname();
-  Serial.println(STA_NAME);
+  LOG("Hostname: %s", STA_NAME.c_str());
 
-  WiFiManagerParameter custom_email("Email", "Enter your email", USER_EMAIL.c_str(), 40);
-  WiFiManagerParameter custom_password("Password", "Enter your password", USER_PASSWORD.c_str(), 40, "type='password'");
-  WiFiManagerParameter custom_device_name("DeviceName", "Enter the device name", DEVICE_NAME.c_str(), 40);
+  WiFiManager wifiManager;
+  wifiManager.setDebugOutput(true);
+  wifiManager.setConfigPortalTimeout(120);
+  wifiManager.setConnectTimeout(60);
+  wifiManager.setCleanConnect(true);
 
-  wifiManager.addParameter(&custom_email);
-  wifiManager.addParameter(&custom_password);
-  wifiManager.addParameter(&custom_device_name);
+  // Parameters MUST live in the same scope as wifiManager.
+  WiFiManagerParameter p_email("Email", "Enter your email", USER_EMAIL.c_str(), 40);
+  WiFiManagerParameter p_password("Password", "Enter your password", USER_PASSWORD.c_str(), 40, "type=\'password\'");
+  WiFiManagerParameter p_name("DeviceName", "Enter the device name", DEVICE_NAME.c_str(), 40);
 
-  wifiManager.setSaveConfigCallback([&custom_email, &custom_password, &custom_device_name]()
-                                    {
-    newEmail = custom_email.getValue();
-    newPassword = custom_password.getValue();
-    newDeviceName = custom_device_name.getValue();
-    if (newEmail != USER_EMAIL || newPassword != USER_PASSWORD || newDeviceName != DEVICE_NAME) {
-      USER_EMAIL = newEmail;
-      USER_PASSWORD = newPassword;
-      DEVICE_NAME = newDeviceName;
+  wifiManager.addParameter(&p_email);
+  wifiManager.addParameter(&p_password);
+  wifiManager.addParameter(&p_name);
+
+  wifiManager.setSaveConfigCallback([&]()
+  {
+    String ne = p_email.getValue();
+    String np = p_password.getValue();
+    String nn = p_name.getValue();
+    if (ne != USER_EMAIL || np != USER_PASSWORD || nn != DEVICE_NAME) {
+      USER_EMAIL = ne;
+      USER_PASSWORD = np;
+      DEVICE_NAME = nn;
+      if (DEVICE_NAME.length() > MAX_DISPLAY_NAME_LEN) DEVICE_NAME = DEVICE_NAME.substring(0, MAX_DISPLAY_NAME_LEN);
       writeStringToEEPROM(EMAIL_ADDR, USER_EMAIL);
       writeStringToEEPROM(PASS_ADDR, USER_PASSWORD);
       writeStringToEEPROM(DEVICE_NAME_ADDR, DEVICE_NAME);
       EEPROM.commit();
-      Serial.println("Updated email, password and deviceName saved to EEPROM.");
-    } });
-  return true;
+      LOG("Updated email, password and deviceName saved to EEPROM.");
+    }
+  });
+
+  String portalSSID = "Guardiao-" + String(ESP.getChipId() & 0xFFFF, HEX);
+
+  if (blocking) {
+    // Show portal screen only when we actually open the portal
+    drawWifiNotConfigured(portalSSID);
+    if (!wifiManager.startConfigPortal(portalSSID.c_str())) {
+      LOG("Config portal timed out — restarting");
+      drawBootError("Portal timeout");
+      delay(3000);
+      ESP.restart();
+    }
+  } else {
+    // autoConnect: try saved network silently first
+    if (!wifiManager.autoConnect(portalSSID.c_str())) {
+      LOG("WiFi connect failed — restarting");
+      drawBootError("WiFi timeout");
+      delay(3000);
+      ESP.restart();
+    }
+  }
 }
 
 /**
- * Starts WiFiManager in auto-connect mode with a 30-second config portal timeout.
- * If connection fails the device continues without blocking.
+ * Starts WiFiManager in auto-connect mode. Delegates to runWiFiPortal().
  */
 void initWifiManager()
 {
-  WiFiManager wifiManager;
-  wifiManager.setDebugOutput(true);
-  wifiManager.setConfigPortalTimeout(30);
-  wifiManager.setConnectTimeout(60);
-  wifiManager.setCleanConnect(true);
-  if (!setupWiFiManager(wifiManager))
-  {
-    Serial.println("Failed to setup WiFi Manager");
-    return;
-  }
-  String portalSSID = "Guardiao-" + String(ESP.getChipId() & 0xFFFF, HEX);
-  if (!wifiManager.autoConnect(portalSSID.c_str()))
-  {
-    Serial.println("Failed to connect and hit timeout");
-    return;
-  }
+  runWiFiPortal(false);
 }
 
 /**
@@ -139,7 +179,9 @@ void initWifiManager()
 unsigned long getTime()
 {
   timeClient.update();
-  return timeClient.getEpochTime();
+  ntpAnchorEpoch  = timeClient.getEpochTime();
+  ntpAnchorMillis = millis();
+  return ntpAnchorEpoch;
 }
 
 /**
@@ -148,64 +190,89 @@ unsigned long getTime()
  */
 void getDeviceConfigurations()
 {
-  Serial.println("Entering getDeviceConfigurations");
+  LOG("[CFG] Fetching device config from Firebase...");
 
   if (!Firebase.ready())
   {
-    Serial.println("Error: Firebase not ready. Restarting.");
+    LOG("Error: Firebase not ready. Restarting.");
     Serial.flush();
     Serial.end();
     ESP.restart();
     return;
   }
 
+  // Read /config (thresholds, intervals) — small JSON, no /datalogger bloat
   String fullPath = databasePath + configPath;
-
   if (!Firebase.RTDB.getJSON(&fbdo, fullPath))
   {
-    Serial.println("Error: failed to fetch config from Firebase.");
+    LOG("Error: failed to fetch config from Firebase.");
     return;
   }
 
   if (fbdo.dataType() != "json")
   {
-    Serial.println("Error: response data is not JSON.");
+    LOG("Error: response data is not JSON.");
     return;
   }
 
   DeserializationError error = deserializeJson(doc, fbdo.jsonString());
   if (error)
   {
-    Serial.print(F("JSON deserialization error: "));
-    Serial.println(error.f_str());
+    LOG("JSON deserialization error: %s", error.c_str());
     return;
   }
 
-  // --- Thresholds ---
+  // --- Config section (doc IS the config object here) ---
+  // Thresholds
   higherTemp = doc["_threshold"]["higherTemp"] | 80.0f;
   lowerTemp = doc["_threshold"]["lowerTemp"] | -80.0f;
   thresholdMode = doc["_threshold"]["thresholdMode"] | "both";
+  LOG("[CFG] thresholds=[%.1f, %.1f] mode=%s interval=%lums name=%s",
+      lowerTemp, higherTemp, thresholdMode.c_str(), timerDelay, DEVICE_NAME.c_str());
 
-  Serial.printf("Threshold: lower=%.1f  higher=%.1f  mode=%s\n",
-                lowerTemp, higherTemp, thresholdMode.c_str());
-
-  // --- Scheduled readings ---
-  // NOTE: isEnabled was never written by the app — derive from intervalMinutes > 0
+  // Scheduled readings (legacy)
   scheduledIntervalMinutes = doc["scheduledReadings"]["intervalMinutes"] | 0;
   scheduledStartHour = doc["scheduledReadings"]["startHour"] | 0;
 
-  if (scheduledIntervalMinutes > 0)
+  // sendIntervalMinutes — app-configurable temperature send interval (preferred)
+  int sendInterval = doc["sendIntervalMinutes"] | 0;
+  if (sendInterval > 0)
+  {
+    timerDelay = (unsigned long)sendInterval * 60UL * 1000UL;
+    // sendInterval applied — logged below in [CFG] summary
+  }
+  else if (scheduledIntervalMinutes > 0)
   {
     timerDelay = (unsigned long)scheduledIntervalMinutes * 60UL * 1000UL;
-    Serial.printf("ScheduledReadings: enabled, interval=%d min\n", scheduledIntervalMinutes);
   }
   else
   {
-    timerDelay = 300000UL; // default: 5 minutes
-    Serial.println("ScheduledReadings: not configured, using default 5 min");
+    timerDelay = 300000UL;
   }
 
-  Serial.println("Leaving getDeviceConfigurations");
+  // --- Device name sync (read /data node — small, separate from /config) ---
+  fbdo.stopWiFiClient();
+  yield();
+  delay(200);  // Let SSL teardown complete before new connection
+  String dataNodePath = databasePath + "/data";
+  if (Firebase.RTDB.getJSON(&fbdo, dataNodePath))
+  {
+    DeserializationError nameErr = deserializeJson(doc, fbdo.jsonString());
+    if (!nameErr)
+    {
+      const char* remoteName = doc["displayName"] | (const char*)nullptr;
+      if (remoteName && strlen(remoteName) > 0 && String(remoteName) != DEVICE_NAME)
+      {
+        LOG("Device name updated from app: '%s' -> '%s'", DEVICE_NAME.c_str(), remoteName);
+        DEVICE_NAME = String(remoteName);
+        if (DEVICE_NAME.length() > MAX_DISPLAY_NAME_LEN) DEVICE_NAME = DEVICE_NAME.substring(0, MAX_DISPLAY_NAME_LEN);
+        writeStringToEEPROM(DEVICE_NAME_ADDR, DEVICE_NAME);
+        EEPROM.commit();
+      }
+    }
+  }
+
+
 }
 
 /**
@@ -215,7 +282,6 @@ void getDeviceConfigurations()
  */
 float readTemperature()
 {
-  Serial.println("Entering readTemperature");
   sensors.requestTemperatures();
   float tempC = sensors.getTempCByIndex(0);
   if (tempC == -127.0 || tempC == 85.0)
@@ -226,7 +292,6 @@ float readTemperature()
   {
     sensorError = false;
   }
-  Serial.println("Leaving readTemperature");
   return tempC;
 }
 
@@ -237,36 +302,37 @@ float readTemperature()
  */
 void checkThresholdAlert()
 {
-  Serial.println("Entering checkThresholdAlert");
   int result = evaluateThreshold();
   if (result == -2)
   {
-    Serial.println("Sensor returned invalid reading!");
+    LOG("[ALERT] Sensor invalid reading — alarm suppressed");
     countMessageSending = 0;
   }
   else if (result == -3)
   {
-    Serial.println("ThresholdMode=none: alarm disabled.");
+    LOG("[ALERT] thresholdMode=none — alarm disabled");
     countMessageSending = 0;
   }
   else if (result == 1)
   {
-    Serial.println("High temperature threshold exceeded!");
+    LOG("[ALERT] HIGH temp=%.1f°C limit=%.1f°C mode=%s",
+        temperature, higherTemp, thresholdMode.c_str());
     countMessageSending++;
     startAlarm();
   }
   else if (result == -1)
   {
-    Serial.println("Low temperature threshold exceeded!");
+    LOG("[ALERT] LOW  temp=%.1f°C limit=%.1f°C mode=%s",
+        temperature, lowerTemp, thresholdMode.c_str());
     countMessageSending++;
     startAlarm();
   }
   else
   {
-    Serial.println("Temperature within limits.");
+    LOG("[ALERT] temp=%.1f°C within limits [%.1f, %.1f]",
+        temperature, lowerTemp, higherTemp);
     countMessageSending = 0;
   }
-  Serial.println("Leaving checkThresholdAlert");
 }
 
 /**
@@ -292,44 +358,41 @@ void ISRWatchDog()
  */
 bool sendDataToFireBase()
 {
-  Serial.println("Entering sendDataToFireBase");
   sendDataPrevMillis = millis();
-  // getDeviceConfigurations() movido para timer próprio em loop() (per D-15/D-16)
-
   timestamp = (int)getTime();
-  Serial.print("time: ");
-  Serial.println(timestamp);
 
   if (!sensorError && timestamp > MIN_VALID_TIMESTAMP)
   {
-    Serial.print("Temperature: ");
-    Serial.println(temperature);
 
+    fbdo.stopWiFiClient();
     json.clear();
-    json.set(deviceNamePath.c_str(), String(DEVICE_NAME));
-    json.set(tempPath.c_str(), temperature);    // float, not String
-    json.set(timestampPath.c_str(), timestamp); // int, not String
-    json.set(statusPath.c_str(), String("online"));
+    // Use json.add (flat keys) instead of json.set (nested) so Firebase PATCH
+    // does multi-path update — preserves other /data fields like displayName.
+    json.add(tempPath, temperature);
+    json.add(timestampPath, timestamp);
+    json.add(statusPath, String("online"));
     // Datalogger: temperature (float) and timestamp (int)
     char dlTempPath[40];
     char dlTsPath[40];
     snprintf(dlTempPath, sizeof(dlTempPath), "/datalogger/%lu/temperature", (unsigned long)timestamp);
     snprintf(dlTsPath, sizeof(dlTsPath), "/datalogger/%lu/timestamp", (unsigned long)timestamp);
-    json.set(dlTempPath, temperature);
-    json.set(dlTsPath, timestamp);
+    json.add(String(dlTempPath), temperature);
+    json.add(String(dlTsPath), (int)timestamp);
 
     bool writeOk = Firebase.RTDB.updateNode(&fbdo, databasePath.c_str(), &json);
-    Serial.printf("Set json... %s\n", writeOk ? "ok" : fbdo.errorReason().c_str());
     json.clear();
+    fbdo.stopWiFiClient();
+    yield();
 
     if (writeOk)
     {
       firebaseFailCount = 0;
       firebaseSkipRemaining = 0;
-      drainOnePendingReading();
+      LOG("[SEND] temp=%.1f°C ts=%lu heap=%u rssi=%d -> ok (fail=0)",
+          temperature, (unsigned long)timestamp, ESP.getFreeHeap(), WiFi.RSSI());
+      drainPendingReadings();
       checkThresholdAlert();
       countDataSentToFireBase += 1;
-      Serial.println("Leaving sendDataToFireBase");
       return true;
     }
     else
@@ -337,20 +400,19 @@ bool sendDataToFireBase()
       firebaseFailCount++;
       firebaseSkipRemaining = (uint8_t)min(1u << firebaseFailCount, 16u);
       enqueuePendingReading(temperature, (uint32_t)timestamp);
-      Serial.printf("[Firebase] Write failed (fail #%u), backing off %u cycles\n",
-                    firebaseFailCount, firebaseSkipRemaining);
+      LOG("[SEND] temp=%.1f°C ts=%lu heap=%u rssi=%d -> FAILED: %s (fail=%u skip=%u)",
+          temperature, (unsigned long)timestamp, ESP.getFreeHeap(), WiFi.RSSI(),
+          fbdo.errorReason().c_str(), firebaseFailCount, firebaseSkipRemaining);
       countDataSentToFireBase += 1;
-      Serial.println("Leaving sendDataToFireBase");
       return false;
     }
   }
   else
   {
-    Serial.println("Invalid temperature and/or invalid timestamp.");
+    LOG("[SEND] skipped — sensorError=%d ts=%lu", (int)sensorError, (unsigned long)timestamp);
   }
 
   countDataSentToFireBase += 1;
-  Serial.println("Leaving sendDataToFireBase");
   return false;
 }
 
@@ -361,8 +423,6 @@ bool sendDataToFireBase()
  */
 void callFirebase()
 {
-  Serial.println("Entering callFirebase");
-
   // Backoff guard: pular ciclo se ainda em período de espera (per D-03)
   if (firebaseSkipRemaining > 0)
   {
@@ -376,14 +436,14 @@ void callFirebase()
         enqueuePendingReading(currentTemp, currentTs);
       }
     }
-    Serial.printf("[Firebase] Backoff: %u cycles remaining\n", firebaseSkipRemaining);
+    LOG("[Firebase] Backoff: %u cycles remaining", firebaseSkipRemaining);
     return;
   }
 
   // Final safety cap: se max failures atingido, resetar (per D-04)
   if (firebaseFailCount >= 5)
   {
-    Serial.println("[Firebase] Max failures reached. Resetting device.");
+    LOG("[Firebase] Max failures reached. Resetting device.");
     drawResetDevice();
     delay(2000);
     ESP.reset();
@@ -397,7 +457,7 @@ void callFirebase()
   // Guard: skip Firebase entirely if WiFi layer is down — avoids SSL crash inside lib
   if (WiFi.status() != WL_CONNECTED)
   {
-    Serial.printf("[Firebase] WiFi not connected (status=%d), skipping cycle\n", WiFi.status());
+    LOG("[Firebase] WiFi not connected (status=%d), skipping cycle", WiFi.status());
     firebaseFailCount++;
     firebaseSkipRemaining = (uint8_t)min(1u << firebaseFailCount, 16u);
     float currentTemp = readTemperature();
@@ -410,13 +470,21 @@ void callFirebase()
     return;
   }
 
-  if (Firebase.ready() && (millis() - sendDataPrevMillis > timerDelay || sendDataPrevMillis == 0))
+  bool timerElapsed = (millis() - sendDataPrevMillis > timerDelay || sendDataPrevMillis == 0);
+  bool thresholdExceeded = (alarmState == ALARM_OFF && countMessageSending == 0 &&
+                            (temperature > higherTemp || temperature < lowerTemp));
+
+  if (Firebase.ready() && (timerElapsed || thresholdExceeded))
   {
+    if (thresholdExceeded && !timerElapsed)
+    {
+      LOG("[Alert] Threshold exceeded — forcing immediate Firebase send");
+    }
     sendDataToFireBase();
   }
-  else if (!Firebase.ready() && (millis() - sendDataPrevMillis > timerDelay || sendDataPrevMillis == 0))
+  else if (!Firebase.ready() && timerElapsed)
   {
-    Serial.println("[WiFi] Firebase not ready. Attempting WiFi reconnect...");
+    LOG("[WiFi] Firebase not ready. Attempting WiFi reconnect...");
     bool reconnected = false;
     for (int attempt = 0; attempt < 3; attempt++)
     {
@@ -426,34 +494,22 @@ void callFirebase()
       if (WiFi.status() == WL_CONNECTED)
       {
         reconnected = true;
-        Serial.printf("[WiFi] Reconnected on attempt %d\n", attempt + 1);
+        LOG("[WiFi] Reconnected on attempt %d", attempt + 1);
         break;
       }
-      Serial.printf("[WiFi] Attempt %d failed, status=%d\n", attempt + 1, WiFi.status());
+      LOG("[WiFi] Attempt %d failed, status=%d", attempt + 1, WiFi.status());
     }
 
     if (!reconnected)
     {
-      Serial.println("[WiFi] All reconnect attempts failed. Resetting.");
+      LOG("[WiFi] All reconnect attempts failed. Resetting.");
       drawResetDevice();
       delay(2000);
       ESP.reset();
     }
-    // Se reconectou, Firebase irá reconectar automaticamente na próxima chamada.
+    // Firebase reconecta automaticamente na proxima chamada apos WiFi recovery.
   }
 
-  if (alarmState == ALARM_OFF && countMessageSending == 0 && temperature > higherTemp)
-  {
-    countMessageSending += 1;
-    checkThresholdAlert();
-  }
-  else if (alarmState == ALARM_OFF && countMessageSending == 0 && temperature < lowerTemp)
-  {
-    countMessageSending += 1;
-    checkThresholdAlert();
-  }
-
-  Serial.println("Leaving callFirebase");
 }
 
 /**
@@ -488,13 +544,8 @@ void setup()
   USER_PASSWORD = readStringFromEEPROM(PASS_ADDR);
   DEVICE_NAME = readStringFromEEPROM(DEVICE_NAME_ADDR);
 
-  Serial.println("SETUP: Reading credentials from EEPROM");
-  Serial.printf("Email: %s  Device: %s\n", USER_EMAIL.c_str(), DEVICE_NAME.c_str());
-
   DEVICE_UUID = String(ESP.getChipId());
   HOST_NAME = "guardiao-" + DEVICE_UUID;
-  Serial.print("ESP Chip Id: ");
-  Serial.println(DEVICE_UUID);
 
   drawBootProgress("WiFi...", 20);
 
@@ -503,27 +554,15 @@ void setup()
 
   if (USER_EMAIL == "" || USER_PASSWORD == "" || DEVICE_NAME == "")
   {
-    drawWifiNotConfigured(portalSSID);
-    Serial.println("Empty credentials. Starting WiFiManager Captive Portal.");
-    WiFiManager wifiManager;
-    wifiManager.setDebugOutput(true);
-    wifiManager.setConfigPortalTimeout(120);
-    wifiManager.setConnectTimeout(60);
-    wifiManager.setCleanConnect(true);
-    if (!setupWiFiManager(wifiManager))
-    {
-      Serial.println("[Boot] Failed to setup WiFi Manager");
-      drawBootError("WiFi config falhou");
-      delay(3000);
-      ESP.restart();
-    }
-    if (!wifiManager.startConfigPortal(portalSSID.c_str()))
-    {
-      Serial.println("[Boot] Config portal timed out.");
-      drawBootError("Portal timeout");
-      delay(3000);
-      ESP.restart();
-    }
+    LOG("Empty credentials. Starting WiFiManager Captive Portal.");
+    runWiFiPortal(true);
+    // Restart after first-time setup: WiFiManager's web server fragments
+    // heap heavily (~20KB). Firebase BearSSL needs a contiguous block to
+    // initialize SSL for the GITKit token request. A clean boot fixes it.
+    LOG("First-time config done — restarting for clean heap before Firebase init.");
+    drawBootProgress("Reiniciando...", 100);
+    delay(1500);
+    ESP.restart();
   }
   else
   {
@@ -532,8 +571,6 @@ void setup()
 
   WIFI_SSID = WiFi.SSID();
   drawBootProgress("NTP...", 40);
-
-  wdtReset.attach(1, ISRWatchDog);
 
   timeClient.begin();
 
@@ -554,9 +591,9 @@ void setup()
   config.database_url = DATABASE_URL;
 
   Firebase.reconnectNetwork(true);
-  fbdo.setResponseSize(4096);
-  fbdo.setBSSLBufferSize(4096, 1024);     // Rx/Tx — reduce SSL stack pressure on ESP8266
-  config.timeout.serverResponse = 8000;   // ms — abandon SSL if server silent for 8s
+  fbdo.setResponseSize(2048);
+  fbdo.setBSSLBufferSize(4096, 1024);     // Rx/Tx — needs 4K rx for SSL certificate chain
+  config.timeout.serverResponse = 10000;  // ms — SSL handshake can be slow on ESP8266
   config.timeout.socketConnection = 8000; // ms — TCP connect timeout
   config.timeout.wifiReconnect = 5000;    // ms — WiFi reconnect window
   config.token_status_callback = tokenStatusCallback;
@@ -564,7 +601,7 @@ void setup()
   Firebase.begin(&config, &auth);
 
   drawBootProgress("Authenticating...", 80);
-  Serial.println("Getting User UID");
+
   int authRetryCount = 0;
   while ((auth.token.uid) == "" && authRetryCount < 30)
   {
@@ -574,28 +611,31 @@ void setup()
   }
   if ((auth.token.uid) == "")
   {
-    Serial.println("\n[Auth] Firebase auth timeout after 30s. Restarting.");
+    LOG("\n[Auth] Firebase auth timeout after 30s. Restarting.");
     drawBootError("Firebase auth falhou");
     delay(3000);
     ESP.restart();
   }
   uid = auth.token.uid.c_str();
 
-  Serial.print("User UID: ");
-  Serial.println(uid);
+
 
   // Protocol v2: generate or load persistent LDID, use as RTDB device node key
   generateOrLoadLDID();
   databasePath = "/UsersData/" + uid + "/devices/" + DEVICE_LDID;
 
-  Serial.println("Calling Firebase Init.");
+  LOG("[BOOT] heap=%u wifi=%s rssi=%d email=%s device=%s ldid=%s",
+      ESP.getFreeHeap(), WiFi.SSID().c_str(), WiFi.RSSI(),
+      USER_EMAIL.c_str(), DEVICE_NAME.c_str(), DEVICE_LDID.c_str());
+  yield();
+  delay(500);  // Let SSL from token auth close cleanly before new SSL operations
   firebaseInit();
+  // Config loaded inside firebaseInit (single GET for entire device node)
 
-  Serial.println("Loading initial device configurations.");
-  getDeviceConfigurations();
+  // Boot message merged into firebaseInit PATCH (single SSL call)
 
-  // Protocol v2: send boot message after init
-  sendBootMessage();
+  // Start WDT after boot sequence
+  wdtReset.attach(1, ISRWatchDog);
 
   OTAsetup();
 
@@ -612,21 +652,8 @@ void setup()
  */
 void openConfigPortal()
 {
-  String portalSSID = "Guardiao-" + String(ESP.getChipId() & 0xFFFF, HEX);
-  WiFiManager wifiManager;
-  wifiManager.setDebugOutput(true);
-  wifiManager.setConfigPortalTimeout(120);
-  wifiManager.setConnectTimeout(60);
-  wifiManager.setCleanConnect(true);
-  if (!setupWiFiManager(wifiManager))
-  {
-    Serial.println("Failed to setup WiFi Manager");
-    beepError();
-    return;
-  }
-  drawWifiNotConfigured(portalSSID);
   beepConfirm();
-  wifiManager.startConfigPortal(portalSSID.c_str());
+  runWiFiPortal(true);
   beepSuccess();
   ESP.reset();
 }
@@ -653,11 +680,11 @@ void loop()
     {
       if (wifiNow)
       {
-        Serial.printf("[OLED] WiFi reconectado — voltando para ui.update() (status=%d)\n", WiFi.status());
+        LOG("[WiFi] reconnected (ssid=%s rssi=%d)", WiFi.SSID().c_str(), WiFi.RSSI());
       }
       else
       {
-        Serial.printf("[OLED] WiFi desconectado — exibindo drawWifiReconnecting() (status=%d)\n", WiFi.status());
+        LOG("[WiFi] disconnected (status=%d)", WiFi.status());
       }
       lastWifiConnected = wifiNow;
     }
@@ -687,7 +714,7 @@ void loop()
 
   if (watchDogCount > 0)
   {
-    Serial.printf("[WDT] loop reset, count was %u\n", watchDogCount);
+    LOG("[WDT] loop ok — count was %u, heap=%u", watchDogCount, ESP.getFreeHeap());
   }
   watchDogCount = 0;
   ArduinoOTA.handle();
@@ -706,11 +733,11 @@ void generateOrLoadLDID()
   {
     DEVICE_LDID = "ldid-" + String(DEVICE_UUID) + "-001";
     writeStringToEEPROM(LDID_ADDR, DEVICE_LDID);
-    Serial.println("LDID generated: " + DEVICE_LDID);
+    LOG("LDID generated: %s", DEVICE_LDID.c_str());
   }
   else
   {
-    Serial.println("LDID loaded: " + DEVICE_LDID);
+    LOG("LDID loaded: %s", DEVICE_LDID.c_str());
   }
 }
 
@@ -720,18 +747,21 @@ void generateOrLoadLDID()
  */
 void sendBootMessage()
 {
+  fbdo.stopWiFiClient();
+  yield();
+
   json.clear();
-  json.add("v", 2);
-  json.add("m", "B");
+  json.add("v", (int)2);
+  json.add("m", String("B"));
   json.add("ts", (int)getTime());
-  json.set("d/uuid", DEVICE_UUID);
-  json.set("d/fw", FIRMWARE_VERSION);
-  json.set("d/rst", resetReason);
-  json.set("d/heap", ESP.getFreeHeap());
-  json.set("d/wifi", WiFi.RSSI());
+  json.add("d/uuid", DEVICE_UUID);
+  json.add("d/fw", String(FIRMWARE_VERSION));
+  json.add("d/rst", (int)resetReason);
+  json.add("d/heap", (int)ESP.getFreeHeap());
+  json.add("d/wifi", (int)WiFi.RSSI());
   char bootPath[128];
   snprintf(bootPath, sizeof(bootPath), "/UsersData/%s/devices/%s/boot", uid.c_str(), DEVICE_LDID.c_str());
-  Serial.printf("Boot msg: %s\n", Firebase.RTDB.updateNode(&fbdo, bootPath, &json) ? "ok" : fbdo.errorReason().c_str());
+  LOG("Boot msg: %s", Firebase.RTDB.updateNode(&fbdo, bootPath, &json) ? "ok" : fbdo.errorReason().c_str());
   json.clear();
 }
 
@@ -741,16 +771,22 @@ void sendBootMessage()
  */
 void sendHeartbeat()
 {
+  fbdo.stopWiFiClient();
+  yield();
+
   json.clear();
-  json.add("v", 2);
-  json.add("m", "H");
+  json.add("v", (int)2);
+  json.add("m", String("H"));
   json.add("ts", (int)getTime());
-  json.set("d/st", calculateStatusBitmap());
-  json.set("d/heap", ESP.getFreeHeap());
-  json.set("d/wifi", WiFi.RSSI());
+  json.add("d/st", (int)calculateStatusBitmap());
+  json.add("d/heap", (int)ESP.getFreeHeap());
+  json.add("d/wifi", (int)WiFi.RSSI());
   char heartbeatPath[128];
   snprintf(heartbeatPath, sizeof(heartbeatPath), "/UsersData/%s/devices/%s/heartbeat", uid.c_str(), DEVICE_LDID.c_str());
-  Firebase.RTDB.updateNode(&fbdo, heartbeatPath, &json);
+  bool hbOk = Firebase.RTDB.updateNode(&fbdo, heartbeatPath, &json);
   json.clear();
   lastHeartbeatMillis = millis();
+  LOG("[HB] heap=%u rssi=%d uptime=%lus status=0x%02X -> %s",
+      ESP.getFreeHeap(), WiFi.RSSI(), millis() / 1000UL,
+      calculateStatusBitmap(), hbOk ? "ok" : fbdo.errorReason().c_str());
 }
