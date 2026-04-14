@@ -318,6 +318,7 @@ void checkThresholdAlert()
     LOG("[ALERT] HIGH temp=%.1f°C limit=%.1f°C mode=%s",
         temperature, higherTemp, thresholdMode.c_str());
     countMessageSending++;
+    blinkLed(3, 100, 100);  // 3x blink = alert
     startAlarm();
   }
   else if (result == -1)
@@ -325,6 +326,7 @@ void checkThresholdAlert()
     LOG("[ALERT] LOW  temp=%.1f°C limit=%.1f°C mode=%s",
         temperature, lowerTemp, thresholdMode.c_str());
     countMessageSending++;
+    blinkLed(3, 100, 100);  // 3x blink = alert
     startAlarm();
   }
   else
@@ -388,6 +390,7 @@ bool sendDataToFireBase()
       firebaseSkipRemaining = 0;
       LOG("[SEND] temp=%.1f°C ts=%lu heap=%u rssi=%d -> ok (fail=0)",
           temperature, (unsigned long)timestamp, ESP.getFreeHeap(), WiFi.RSSI());
+      blinkLed(1, 80, 0);  // 1x short blink = send ok
       drainPendingReadings();
       checkThresholdAlert();
       countDataSentToFireBase += 1;
@@ -522,6 +525,51 @@ void boardLedInitialization()
   digitalWrite(LED_BUILTIN, LOW);
   delay(1000);
   digitalWrite(LED_BUILTIN, HIGH);
+}
+
+/**
+ * Blinks the built-in LED n times with given on/off duration in ms.
+ * LED_BUILTIN on ESP8266 is active-LOW.
+ */
+void blinkLed(uint8_t times, uint16_t onMs, uint16_t offMs)
+{
+  for (uint8_t i = 0; i < times; i++)
+  {
+    digitalWrite(LED_BUILTIN, LOW);   // on
+    delay(onMs);
+    digitalWrite(LED_BUILTIN, HIGH);  // off
+    if (i < times - 1) delay(offMs);
+  }
+}
+
+/**
+ * Blinks the built-in LED n times with given on/off duration in ms.
+ * LED_BUILTIN on ESP8266 is active-LOW.
+ */
+void blinkLed(uint8_t times, uint16_t onMs, uint16_t offMs)
+{
+  for (uint8_t i = 0; i < times; i++)
+  {
+    digitalWrite(LED_BUILTIN, LOW);   // on
+    delay(onMs);
+    digitalWrite(LED_BUILTIN, HIGH);  // off
+    if (i < times - 1) delay(offMs);
+  }
+}
+
+/**
+ * Blinks the built-in LED n times with given on/off duration in ms.
+ * LED_BUILTIN on ESP8266 is active-LOW.
+ */
+void blinkLed(uint8_t times, uint16_t onMs, uint16_t offMs)
+{
+  for (uint8_t i = 0; i < times; i++)
+  {
+    digitalWrite(LED_BUILTIN, LOW);   // on
+    delay(onMs);
+    digitalWrite(LED_BUILTIN, HIGH);  // off
+    if (i < times - 1) delay(offMs);
+  }
 }
 
 void setup()
