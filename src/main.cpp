@@ -271,8 +271,8 @@ void getDeviceConfigurations()
       }
     }
   }
-
-
+  fbdo.stopWiFiClient();
+  yield();
 }
 
 /**
@@ -709,9 +709,14 @@ void loop()
     getDeviceConfigurations();
   }
 
-  if (ESP.getFreeHeap() < 15000)
   {
-    LOG("[HEAP] WARNING: free heap=%u — SSL/Firebase may fail", ESP.getFreeHeap());
+    static uint32_t lastHeapWarnMs = 0;
+    uint32_t freeHeap = ESP.getFreeHeap();
+    if (freeHeap < 15000 && millis() - lastHeapWarnMs > 30000)
+    {
+      LOG("[HEAP] WARNING: free heap=%u — SSL/Firebase may fail", freeHeap);
+      lastHeapWarnMs = millis();
+    }
   }
   watchDogCount = 0;
   ArduinoOTA.handle();
