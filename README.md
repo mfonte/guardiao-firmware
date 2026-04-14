@@ -91,6 +91,8 @@ DS18B20 → ESP → Firebase Realtime DB → App / Web
 - JSON payload: `{ "temperature": 25.4, "timestamp": 1234567890, "deviceName": "my-sensor" }`
 - Protocol v2: LDID-based device identity, boot messages, periodic heartbeats
 
+> **Wi-Fi credential limits:** The device stores up to **3 networks** in EEPROM. SSID max **32 characters**, password max **64 characters**. Values exceeding these limits are silently truncated.
+
 ---
 
 ## Development
