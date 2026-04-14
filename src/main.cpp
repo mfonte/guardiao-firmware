@@ -58,6 +58,7 @@ void generateOrLoadLDID();
 void sendBootMessage();
 void sendHeartbeat();
 unsigned long getTime();
+bool tryStoredCredentials();
 void blinkLed(uint8_t times, uint16_t onMs, uint16_t offMs);
 
 /**
@@ -105,6 +106,43 @@ void firebaseInit()
  * @param blocking  true  → startConfigPortal (first-time / forced reset)
  *                  false → autoConnect       (normal reconnect)
  */
+bool tryStoredCredentials()
+{
+  WifiSlot slots[WIFI_CRED_COUNT];
+  uint8_t count = 0;
+  loadWifiCredentials(slots, count);
+  if (count == 0) return false;
+
+  WiFi.mode(WIFI_STA);
+  for (uint8_t i = 0; i < count; i++) {
+    if (slots[i].ssid[0] == '\0') continue;
+    char label[20];
+    snprintf(label, sizeof(label), "WiFi %u/%u...", i + 1, count);
+    drawBootProgress(label, 20 + i * 20);
+    LOG("[WiFi] Trying slot %u: %s", i, slots[i].ssid);
+    WiFi.begin(slots[i].ssid, slots[i].password);
+    uint8_t t = 0;
+    while (WiFi.status() != WL_CONNECTED && t < 40) {  // 20s per network
+      delay(500);
+      yield();
+      t++;
+    }
+    if (WiFi.status() == WL_CONNECTED) {
+      WIFI_SSID = String(slots[i].ssid);
+      LOG("[WiFi] Connected to '%s' (slot %u)", slots[i].ssid, i);
+      if (i > 0) {
+        addWifiCredential(slots[i].ssid, slots[i].password);  // promote to slot 0
+      }
+      return true;
+    }
+    WiFi.disconnect(true);
+    delay(200);
+    yield();
+    LOG("[WiFi] Slot %u ('%s') failed", i, slots[i].ssid);
+  }
+  return false;
+}
+
 void runWiFiPortal(bool blocking)
 {
   STA_NAME = WiFi.hostname();
@@ -149,19 +187,40 @@ void runWiFiPortal(bool blocking)
     // Show portal screen only when we actually open the portal
     drawWifiNotConfigured(portalSSID);
     if (!wifiManager.startConfigPortal(portalSSID.c_str())) {
-      LOG("Config portal timed out — restarting");
+      LOG("Config portal timed out -- restarting");
       drawBootError("Portal timeout");
       delay(3000);
       ESP.restart();
     }
+    addWifiCredential(WiFi.SSID().c_str(), WiFi.psk().c_str());  // seed ring buffer
   } else {
-    // autoConnect: try saved network silently first
-    if (!wifiManager.autoConnect(portalSSID.c_str())) {
-      LOG("WiFi connect failed — restarting");
-      drawBootError("WiFi timeout");
-      delay(3000);
-      ESP.restart();
+    // Fast path: try stored credentials ring buffer before falling to portal.
+    if (tryStoredCredentials()) return;
+
+    // All stored credentials failed (or none stored on first boot).
+    WifiSlot slots[WIFI_CRED_COUNT];
+    uint8_t slotCount = 0;
+    loadWifiCredentials(slots, slotCount);
+
+    if (slotCount > 0) {
+      // Known networks unavailable -- open portal (skip redundant autoConnect)
+      drawWifiNotConfigured(portalSSID);
+      if (!wifiManager.startConfigPortal(portalSSID.c_str())) {
+        LOG("WiFi connect failed -- restarting");
+        drawBootError("WiFi timeout");
+        delay(3000);
+        ESP.restart();
+      }
+    } else {
+      // First boot -- no stored creds, let WiFiManager try SDK-saved network first
+      if (!wifiManager.autoConnect(portalSSID.c_str())) {
+        LOG("WiFi connect failed -- restarting");
+        drawBootError("WiFi timeout");
+        delay(3000);
+        ESP.restart();
+      }
     }
+    addWifiCredential(WiFi.SSID().c_str(), WiFi.psk().c_str());  // seed ring buffer
   }
 }
 

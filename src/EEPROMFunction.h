@@ -4,14 +4,14 @@
 #include "config.h"
 #else
 #include "EEPROM.h"
-const int EEPROM_SIZE = 512;
+const int EEPROM_SIZE = 1024;
 #define PENDING_QUEUE_ADDR    380
 #define PENDING_QUEUE_MAGIC   0xA5
 #define PENDING_QUEUE_MAXLEN  16
 #endif
 
 #ifndef NATIVE_TEST
-const int EEPROM_SIZE = 512; // MAX EEPROM SIZE
+const int EEPROM_SIZE = 1024; // MAX EEPROM SIZE
 #endif
 
 /**
@@ -123,40 +123,109 @@ void enqueuePendingReading(float temp, uint32_t ts)
 }
 
 #ifndef NATIVE_TEST
-void drainOnePendingReading()
+void drainPendingReadings()
 {
   if (pendingQueueLen == 0)
     return;
 
-  // Enviar a entrada mais antiga (index 0)
+  // Batch all pending entries into a single Firebase JSON update
   FirebaseJson drainJson;
   char drainTempPath[48];
   char drainTsPath[48];
-  snprintf(drainTempPath, sizeof(drainTempPath), "/datalogger/%lu/temperature", (unsigned long)pendingQueue[0].timestamp);
-  snprintf(drainTsPath, sizeof(drainTsPath), "/datalogger/%lu/timestamp", (unsigned long)pendingQueue[0].timestamp);
-  drainJson.set(drainTempPath, pendingQueue[0].temperature);
-  drainJson.set(drainTsPath, (int)pendingQueue[0].timestamp);
+
+  for (uint8_t i = 0; i < pendingQueueLen; i++)
+  {
+    snprintf(drainTempPath, sizeof(drainTempPath), "/datalogger/%lu/temperature", (unsigned long)pendingQueue[i].timestamp);
+    snprintf(drainTsPath, sizeof(drainTsPath), "/datalogger/%lu/timestamp", (unsigned long)pendingQueue[i].timestamp);
+    drainJson.set(drainTempPath, pendingQueue[i].temperature);
+    drainJson.set(drainTsPath, (int)pendingQueue[i].timestamp);
+  }
+
+  uint8_t toSend = pendingQueueLen;
 
   if (Firebase.RTDB.updateNode(&fbdo, databasePath.c_str(), &drainJson))
   {
-    // Sucesso: remover da fila
-    memmove(pendingQueue, pendingQueue + 1, (pendingQueueLen - 1) * sizeof(PendingReading));
-    pendingQueueLen--;
-    if (pendingQueueLen == 0)
-    {
-      // Fila vazia: invalidar magic byte
-      EEPROM.write(PENDING_QUEUE_ADDR, 0x00);
-    }
-    else
-    {
-      EEPROM.write(PENDING_QUEUE_ADDR + 1, pendingQueueLen);
-    }
+    // All sent — clear queue and EEPROM
+    pendingQueueLen = 0;
+    EEPROM.write(PENDING_QUEUE_ADDR, 0x00);
     EEPROM.commit();
-    Serial.printf("[Queue] Drained 1 pending reading (queue len=%u)\n", pendingQueueLen);
+    Serial.printf("[Queue] Drained all %u pending reading(s)\n", toSend);
   }
   else
   {
-    Serial.printf("[Queue] Drain failed: %s — will retry next cycle\n", fbdo.errorReason().c_str());
+    Serial.printf("[Queue] Batch drain failed: %s — will retry next cycle\n", fbdo.errorReason().c_str());
   }
 }
 #endif
+
+// ---- WiFi credential ring buffer — stores last 3 networks, slot 0 = primary ----
+#define WIFI_CREDS_ADDR  510  // Addr 510–805: 2 header bytes + 3×98 data bytes
+#define WIFI_CREDS_MAGIC 0xB3 // Distinguishes valid data from virgin EEPROM (0xFF)
+#define WIFI_CRED_COUNT  3    // Maximum number of stored networks
+
+struct WifiSlot {
+  char ssid[33];     // up to 32-char SSID + null terminator
+  char password[65]; // up to 64-char WPA2 password + null terminator
+};                   // 98 bytes — EEPROM.put()/get() safe
+
+#ifndef NATIVE_TEST
+void loadWifiCredentials(WifiSlot slots[WIFI_CRED_COUNT], uint8_t &count)
+{
+  uint8_t magic = EEPROM.read(WIFI_CREDS_ADDR);
+  if (magic == WIFI_CREDS_MAGIC) {
+    count = min((uint8_t)WIFI_CRED_COUNT, EEPROM.read(WIFI_CREDS_ADDR + 1));
+    for (uint8_t i = 0; i < count; i++) {
+      EEPROM.get(WIFI_CREDS_ADDR + 2 + i * sizeof(WifiSlot), slots[i]);
+    }
+  } else {
+    count = 0;
+    for (uint8_t i = 0; i < WIFI_CRED_COUNT; i++) {
+      slots[i].ssid[0] = '\0';
+      slots[i].password[0] = '\0';
+    }
+  }
+}
+
+void saveWifiCredentials(WifiSlot slots[WIFI_CRED_COUNT], uint8_t count)
+{
+  EEPROM.write(WIFI_CREDS_ADDR, WIFI_CREDS_MAGIC);
+  EEPROM.write(WIFI_CREDS_ADDR + 1, count);
+  for (uint8_t i = 0; i < WIFI_CRED_COUNT; i++) {
+    EEPROM.put(WIFI_CREDS_ADDR + 2 + i * sizeof(WifiSlot), slots[i]);
+  }
+  EEPROM.commit();
+}
+
+// Adds a network as slot 0. If the SSID already exists, refreshes its password
+// and promotes it to slot 0. Oldest entry is dropped when the ring buffer is full.
+void addWifiCredential(const char* ssid, const char* password)
+{
+  if (!ssid || ssid[0] == '\0') return;
+  WifiSlot slots[WIFI_CRED_COUNT];
+  uint8_t count = 0;
+  loadWifiCredentials(slots, count);
+
+  // Check if SSID already in list — update password and promote to slot 0
+  for (uint8_t i = 0; i < count; i++) {
+    if (strcmp(slots[i].ssid, ssid) == 0) {
+      WifiSlot tmp = slots[i];
+      strlcpy(tmp.password, password, sizeof(tmp.password));
+      memmove(slots + 1, slots, i * sizeof(WifiSlot));
+      slots[0] = tmp;
+      saveWifiCredentials(slots, count);
+      Serial.printf("[WiFi] Promoted '%s' to slot 0\n", ssid);
+      return;
+    }
+  }
+
+  // New SSID — insert at front, drop oldest if full
+  memmove(slots + 1, slots, (WIFI_CRED_COUNT - 1) * sizeof(WifiSlot));
+  strlcpy(slots[0].ssid, ssid, sizeof(slots[0].ssid));
+  strlcpy(slots[0].password, password, sizeof(slots[0].password));
+  count = min((uint8_t)(count + 1), (uint8_t)WIFI_CRED_COUNT);
+  saveWifiCredentials(slots, count);
+  Serial.printf("[WiFi] Saved '%s' to slot 0 (total=%u)\n", ssid, count);
+}
+#endif
+
+// ---- WiFi credential ring buffer — stores last 3 networks, slot 0 = primary ----

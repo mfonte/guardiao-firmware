@@ -5,7 +5,7 @@
 class EEPROMClass
 {
 public:
-  uint8_t _data[512];
+  uint8_t _data[1024];
 
   EEPROMClass() { memset(_data, 0xFF, sizeof(_data)); }
 
