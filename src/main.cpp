@@ -82,9 +82,9 @@ void firebaseInit()
 
   yield();
   bool ok = Firebase.RTDB.updateNode(&fbdo, databasePath.c_str(), &json);
-  LOG("[BOOT] fw=%s heap=%u wifi=%s rssi=%d uid=%.8s ldid=%s — PATCH %s",
+  LOG("[BOOT] fw=%s heap=%u wifi=%s rssi=%d email=%s uid=%.8s ldid=%s — PATCH %s",
       FIRMWARE_VERSION, ESP.getFreeHeap(), WIFI_SSID.c_str(), WiFi.RSSI(),
-      uid.c_str(), DEVICE_LDID.c_str(), ok ? "ok" : fbdo.errorReason().c_str());
+      USER_EMAIL.c_str(), uid.c_str(), DEVICE_LDID.c_str(), ok ? "ok" : fbdo.errorReason().c_str());
   json.clear();
 
   // Tear down SSL session completely — ESP8266 can only handle one at a time
@@ -624,9 +624,6 @@ void setup()
   generateOrLoadLDID();
   databasePath = "/UsersData/" + uid + "/devices/" + DEVICE_LDID;
 
-  LOG("[BOOT] heap=%u wifi=%s rssi=%d email=%s device=%s ldid=%s",
-      ESP.getFreeHeap(), WiFi.SSID().c_str(), WiFi.RSSI(),
-      USER_EMAIL.c_str(), DEVICE_NAME.c_str(), DEVICE_LDID.c_str());
   yield();
   delay(500);  // Let SSL from token auth close cleanly before new SSL operations
   firebaseInit();
@@ -712,9 +709,9 @@ void loop()
     getDeviceConfigurations();
   }
 
-  if (watchDogCount > 0)
+  if (ESP.getFreeHeap() < 15000)
   {
-    LOG("[WDT] loop ok — count was %u, heap=%u", watchDogCount, ESP.getFreeHeap());
+    LOG("[HEAP] WARNING: free heap=%u — SSL/Firebase may fail", ESP.getFreeHeap());
   }
   watchDogCount = 0;
   ArduinoOTA.handle();
