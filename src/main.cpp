@@ -329,8 +329,6 @@ void checkThresholdAlert()
   }
   else
   {
-    LOG("[ALERT] temp=%.1f°C within limits [%.1f, %.1f]",
-        temperature, lowerTemp, higherTemp);
     countMessageSending = 0;
   }
 }
