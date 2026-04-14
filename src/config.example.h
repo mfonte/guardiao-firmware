@@ -1,11 +1,33 @@
 #pragma once
+
+// ---- Timestamped log macro ----
+// Shows real local time (BRT GMT-3) when NTP is synced, uptime [MM:SS.cc] otherwise.
+#ifndef NATIVE_TEST
+#define LOG(fmt, ...) do { \
+  if (ntpAnchorEpoch > 0) { \
+    unsigned long _epoch = ntpAnchorEpoch + (millis() - ntpAnchorMillis) / 1000UL \
+                           + (unsigned long)(TIMEZONE_OFFSET_SEC + 86400L); \
+    time_t _t = (time_t)_epoch; \
+    struct tm *_ti = gmtime(&_t); \
+    Serial.printf("[%02d:%02d:%02d] " fmt "\n", \
+      _ti->tm_hour, _ti->tm_min, _ti->tm_sec, ##__VA_ARGS__); \
+  } else { \
+    unsigned long _ms = millis(); \
+    Serial.printf("[%02lu:%02lu.%02lu] " fmt "\n", \
+      (_ms / 60000UL) % 100, (_ms / 1000UL) % 60, (_ms / 10UL) % 100, ##__VA_ARGS__); \
+  } \
+} while(0)
+#else
+#define LOG(fmt, ...) do { printf("[TEST] " fmt "\n", ##__VA_ARGS__); } while(0)
+#endif
 // Local firmware configuration template.
 // Copy to `src/config.h` and fill in with real environment values.
 
 // EEPROM address map for per-device persistent data
 const int EMAIL_ADDR      = 0;   // Email string start address
 const int PASS_ADDR       = 100; // Password string start address
-const int DEVICE_NAME_ADDR = 200; // Device name string start address
+const int DEVICE_NAME_ADDR = 200;
+const int MAX_DISPLAY_NAME_LEN = 20;  // OLED SSD1306 + app UI hard limit // Device name string start address
 const int LDID_ADDR       = 300; // Logical Device ID string start address
 
 // ---- Runtime state (populated at boot from EEPROM / WiFi / Firebase) ----
@@ -51,7 +73,7 @@ String HOST_NAME;     // OTA hostname ("guardiao-<chipId>")
 
 // ---- Firebase RTDB path fragments (relative to the device node root) ----
 String deviceUUIDPath          = "/deviceUUID";
-String deviceNamePath          = "/data/deviceName";
+String deviceNamePath          = "/data/displayName";
 String tempPath                = "/data/temperature";
 String timestampPath           = "/data/timestamp";
 String statusPath              = "/data/deviceStatus";
