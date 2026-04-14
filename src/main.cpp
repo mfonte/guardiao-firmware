@@ -231,24 +231,18 @@ void getDeviceConfigurations()
   LOG("[CFG] thresholds=[%.1f, %.1f] mode=%s interval=%lums name=%s",
       lowerTemp, higherTemp, thresholdMode.c_str(), timerDelay, DEVICE_NAME.c_str());
 
-  // Scheduled readings (legacy)
+  // Canonical interval source: scheduledReadings.intervalMinutes
+  // (sendIntervalMinutes legacy field discontinued per firmware-app contract v0.3)
   scheduledIntervalMinutes = doc["scheduledReadings"]["intervalMinutes"] | 0;
   scheduledStartHour = doc["scheduledReadings"]["startHour"] | 0;
 
-  // sendIntervalMinutes — app-configurable temperature send interval (preferred)
-  int sendInterval = doc["sendIntervalMinutes"] | 0;
-  if (sendInterval > 0)
-  {
-    timerDelay = (unsigned long)sendInterval * 60UL * 1000UL;
-    // sendInterval applied — logged below in [CFG] summary
-  }
-  else if (scheduledIntervalMinutes > 0)
+  if (scheduledIntervalMinutes > 0)
   {
     timerDelay = (unsigned long)scheduledIntervalMinutes * 60UL * 1000UL;
   }
   else
   {
-    timerDelay = 300000UL;
+    timerDelay = 300000UL;  // 5min default
   }
 
   // --- Device name sync (read /data node — small, separate from /config) ---
