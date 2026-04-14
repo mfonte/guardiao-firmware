@@ -58,6 +58,7 @@ void generateOrLoadLDID();
 void sendBootMessage();
 void sendHeartbeat();
 unsigned long getTime();
+void blinkLed(uint8_t times, uint16_t onMs, uint16_t offMs);
 
 /**
  * Writes initial device identity and online status to Firebase RTDB.
@@ -527,35 +528,8 @@ void boardLedInitialization()
   digitalWrite(LED_BUILTIN, HIGH);
 }
 
-/**
- * Blinks the built-in LED n times with given on/off duration in ms.
- * LED_BUILTIN on ESP8266 is active-LOW.
- */
-void blinkLed(uint8_t times, uint16_t onMs, uint16_t offMs)
-{
-  for (uint8_t i = 0; i < times; i++)
-  {
-    digitalWrite(LED_BUILTIN, LOW);   // on
-    delay(onMs);
-    digitalWrite(LED_BUILTIN, HIGH);  // off
-    if (i < times - 1) delay(offMs);
-  }
-}
 
-/**
- * Blinks the built-in LED n times with given on/off duration in ms.
- * LED_BUILTIN on ESP8266 is active-LOW.
- */
-void blinkLed(uint8_t times, uint16_t onMs, uint16_t offMs)
-{
-  for (uint8_t i = 0; i < times; i++)
-  {
-    digitalWrite(LED_BUILTIN, LOW);   // on
-    delay(onMs);
-    digitalWrite(LED_BUILTIN, HIGH);  // off
-    if (i < times - 1) delay(offMs);
-  }
-}
+
 
 /**
  * Blinks the built-in LED n times with given on/off duration in ms.
