@@ -528,12 +528,19 @@ void callFirebase()
   bool timerElapsed = (millis() - sendDataPrevMillis > timerDelay || sendDataPrevMillis == 0);
   bool thresholdExceeded = (alarmState == ALARM_OFF && countMessageSending == 0 &&
                             (temperature > higherTemp || temperature < lowerTemp));
+  // Recovery send: alert was sent (countMessageSending > 0) but temp is now back within limits.
+  // Forces an immediate reading so the backend knows the alert condition cleared.
+  bool alertRecovered = (countMessageSending > 0) && (evaluateThreshold() == 0);
 
-  if (Firebase.ready() && (timerElapsed || thresholdExceeded))
+  if (Firebase.ready() && (timerElapsed || thresholdExceeded || alertRecovered))
   {
     if (thresholdExceeded && !timerElapsed)
     {
       LOG("[Alert] Threshold exceeded — forcing immediate Firebase send");
+    }
+    if (alertRecovered && !timerElapsed)
+    {
+      LOG("[Alert] Threshold cleared — forcing recovery send");
     }
     sendDataToFireBase();
   }
