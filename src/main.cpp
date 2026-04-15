@@ -254,10 +254,7 @@ void getDeviceConfigurations()
 
   if (!Firebase.ready())
   {
-    LOG("Error: Firebase not ready. Restarting.");
-    Serial.flush();
-    Serial.end();
-    ESP.restart();
+    LOG("[CFG] Firebase not ready — skipping config fetch, will retry next cycle");
     return;
   }
 
