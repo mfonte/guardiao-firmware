@@ -6,24 +6,54 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [Unreleased]
+## [1.2.0] - 2026-04-16
+
+### Fixed
+- RTDB temperature history wiped on restart — datalogger now written to
+  its own timestamped path (`/datalogger/{ts}`) instead of nested inside
+  the device root PATCH, preventing Firebase from replacing the entire
+  `/datalogger` node on each send (fixes #10)
+- Alert recovery: temperature returning to safe range after a HIGH/LOW
+  alert now triggers an immediate Firebase send instead of waiting the
+  full 5-minute interval
+- `getDeviceConfigurations()` no longer calls `ESP.restart()` when
+  Firebase is transiently not ready — retries silently on next cycle
 
 ### Added
-- DS18B20 temperature sensor reading via OneWire
-- Data push via HTTP to Firebase Realtime Database
-- Automatic Wi-Fi reconnection via WiFiManager captive portal
-- Passive buzzer alarm for threshold violations
-- OLED display (SSD1306) for status, temperature, WiFi info
-- Protocol v2: persistent LDID, boot messages, periodic heartbeats
-- OTA update support via ArduinoOTA
+- WiFi credential ring buffer: stores last 3 networks in EEPROM
+  (addr 510), auto-reconnects on boot, promotes successful network to
+  slot 0 (SSID max 32 chars, password max 64 chars)
+- Clock frame interpolates seconds via `millis()` delta from last NTP
+  sync — clock ticks every second without blocking Firebase calls
+- LED feedback: 1 blink on successful send, 3 blinks on alarm
+
+### Changed
+- `sendIntervalMinutes` deprecated — `scheduledReadings.intervalMinutes`
+  is now the single source of truth for the send interval
+- Structured log format: `[BOOT]`, `[SEND]`, `[ALERT]`, `[HB]`, `[CFG]`
+  with real BRT timestamp when NTP is synced, uptime fallback otherwise
 
 ---
 
-<!-- Example release:
-## [0.1.0] - YYYY-MM-DD
+## [1.1.0] - 2026-04-14 (Production Hardening)
+
+### Fixed
+- ISR watchdog (`ISRWatchDog`) no longer calls `Serial` — only sets flag
+- WiFi reconnection attempted before `ESP.reset()` in `callFirebase()`
+- Firebase auth retry with max attempts and OLED error screen on failure
 
 ### Added
-- DS18B20 temperature reading (#1)
-- HTTP push to Firebase (#2)
-- Automatic Wi-Fi reconnection (#3)
--->
+- Exponential backoff on Firebase failure (min 3 retries before reset)
+- EEPROM pending queue: stores up to 16 readings offline, drained on
+  next successful Firebase connection
+- Separate config-fetch interval (60 min) from data-send interval
+- `drawWifiReconnecting()` modal on WiFi disconnection in `loop()`
+- `drawBootError()` shown on all critical boot failures
+- Module decomposition: `drawOled.h` split into `alarm.h`, `buttons.h`,
+  `buzzer.h`, `drawOled.h` (rendering only)
+- `bool sensorError` flag replaces magic float sentinels (-127, 85)
+- `snprintf` + `char[]` replaces `String` in all Firebase hot-paths
+- PlatformIO native test environment with Unity — 19 unit tests
+
+---
+

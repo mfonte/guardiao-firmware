@@ -44,7 +44,7 @@ String STA_NAME;      // Hostname / STA label used during portal setup
 String HOST_NAME;     // OTA hostname ("guardiao-<chipId>")
 
 // ---- Firmware metadata ----
-#define FIRMWARE_VERSION    "0.1.0"
+#define FIRMWARE_VERSION    "1.2.0"
 #define HEARTBEAT_INTERVAL  300000L  // Heartbeat interval: 5 minutes (ms)
 
 // ---- Firebase RTDB credentials (replace with real values in config.h) ----
