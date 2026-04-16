@@ -69,6 +69,18 @@ extern FirebaseData fbdo;
 extern String databasePath;
 #endif
 
+#define PENDING_META_ADDR   806   // Addr 806–823: 2 header bytes + 16 source bytes
+#define PENDING_META_MAGIC  0x5C
+
+enum PendingReadingSource : uint8_t
+{
+  PENDING_SRC_UNKNOWN   = 0,
+  PENDING_SRC_INTERVAL  = 1,
+  PENDING_SRC_SCHEDULED = 2,
+  PENDING_SRC_THRESHOLD = 3,
+  PENDING_SRC_RECOVERY  = 4,
+};
+
 struct PendingReading
 {
   uint32_t timestamp;
@@ -76,10 +88,76 @@ struct PendingReading
 }; // 8 bytes — EEPROM.put()/get() safe
 
 PendingReading pendingQueue[PENDING_QUEUE_MAXLEN];
+uint8_t pendingQueueSource[PENDING_QUEUE_MAXLEN];
 uint8_t pendingQueueLen = 0;
+
+const char *pendingSourceLabel(uint8_t source)
+{
+  switch (source)
+  {
+    case PENDING_SRC_INTERVAL:  return "interval";
+    case PENDING_SRC_SCHEDULED: return "scheduled";
+    case PENDING_SRC_THRESHOLD: return "threshold";
+    case PENDING_SRC_RECOVERY:  return "recovery";
+    default:                    return "unknown";
+  }
+}
+
+bool isScheduledPendingSource(uint8_t source)
+{
+  return source == PENDING_SRC_SCHEDULED;
+}
+
+void persistPendingQueue()
+{
+  EEPROM.write(PENDING_QUEUE_ADDR, PENDING_QUEUE_MAGIC);
+  EEPROM.write(PENDING_QUEUE_ADDR + 1, pendingQueueLen);
+  for (uint8_t i = 0; i < pendingQueueLen; i++)
+  {
+    EEPROM.put(PENDING_QUEUE_ADDR + 2 + i * sizeof(PendingReading), pendingQueue[i]);
+  }
+
+  EEPROM.write(PENDING_META_ADDR, PENDING_META_MAGIC);
+  EEPROM.write(PENDING_META_ADDR + 1, pendingQueueLen);
+  for (uint8_t i = 0; i < pendingQueueLen; i++)
+  {
+    EEPROM.write(PENDING_META_ADDR + 2 + i, pendingQueueSource[i]);
+  }
+
+  EEPROM.commit();
+}
+
+void clearPendingQueueStorage()
+{
+  pendingQueueLen = 0;
+  memset(pendingQueueSource, 0, sizeof(pendingQueueSource));
+  EEPROM.write(PENDING_QUEUE_ADDR, 0x00);
+  EEPROM.write(PENDING_META_ADDR, 0x00);
+  EEPROM.commit();
+}
+
+void removePendingAt(uint8_t index)
+{
+  if (index >= pendingQueueLen)
+    return;
+
+  if (index + 1 < pendingQueueLen)
+  {
+    memmove(pendingQueue + index,
+            pendingQueue + index + 1,
+            (pendingQueueLen - index - 1) * sizeof(PendingReading));
+    memmove(pendingQueueSource + index,
+            pendingQueueSource + index + 1,
+            (pendingQueueLen - index - 1) * sizeof(uint8_t));
+  }
+
+  pendingQueueLen--;
+}
 
 void loadPendingQueue()
 {
+  memset(pendingQueueSource, 0, sizeof(pendingQueueSource));
+
   uint8_t magic = EEPROM.read(PENDING_QUEUE_ADDR);
   if (magic == PENDING_QUEUE_MAGIC)
   {
@@ -90,7 +168,32 @@ void loadPendingQueue()
     {
       EEPROM.get(PENDING_QUEUE_ADDR + 2 + i * sizeof(PendingReading), pendingQueue[i]);
     }
-    Serial.printf("[Queue] Loaded %u pending reading(s) from EEPROM\n", pendingQueueLen);
+
+    uint8_t metaMagic = EEPROM.read(PENDING_META_ADDR);
+    uint8_t metaCount = EEPROM.read(PENDING_META_ADDR + 1);
+    if (metaMagic == PENDING_META_MAGIC)
+    {
+      uint8_t taggedCount = min(metaCount, pendingQueueLen);
+      for (uint8_t i = 0; i < taggedCount; i++)
+      {
+        pendingQueueSource[i] = EEPROM.read(PENDING_META_ADDR + 2 + i);
+      }
+      for (uint8_t i = taggedCount; i < pendingQueueLen; i++)
+      {
+        pendingQueueSource[i] = PENDING_SRC_INTERVAL;
+      }
+      Serial.printf("[Queue] Loaded %u pending reading(s) from EEPROM (%u source-tagged)\n",
+                    pendingQueueLen, taggedCount);
+    }
+    else
+    {
+      for (uint8_t i = 0; i < pendingQueueLen; i++)
+      {
+        pendingQueueSource[i] = PENDING_SRC_INTERVAL;
+      }
+      Serial.printf("[Queue] Loaded %u pending reading(s) from EEPROM (legacy format, source=interval)\n",
+                    pendingQueueLen);
+    }
   }
   else
   {
@@ -99,27 +202,61 @@ void loadPendingQueue()
   }
 }
 
-void enqueuePendingReading(float temp, uint32_t ts)
+void enqueuePendingReading(float temp, uint32_t ts, uint8_t source = PENDING_SRC_INTERVAL)
 {
   if (pendingQueueLen >= PENDING_QUEUE_MAXLEN)
   {
-    // Ring buffer: descartar a entrada mais antiga
-    Serial.printf("[Queue] Full, dropping oldest (ts=%u)\n", pendingQueue[0].timestamp);
-    memmove(pendingQueue, pendingQueue + 1, (PENDING_QUEUE_MAXLEN - 1) * sizeof(PendingReading));
-    pendingQueueLen = PENDING_QUEUE_MAXLEN - 1;
+    int dropIndex = -1;
+
+    if (isScheduledPendingSource(source))
+    {
+      for (uint8_t i = 0; i < pendingQueueLen; i++)
+      {
+        if (!isScheduledPendingSource(pendingQueueSource[i]))
+        {
+          dropIndex = i;
+          break;
+        }
+      }
+      if (dropIndex < 0)
+      {
+        dropIndex = 0; // queue already contains only scheduled items: keep the freshest ones
+      }
+    }
+    else
+    {
+      for (uint8_t i = 0; i < pendingQueueLen; i++)
+      {
+        if (!isScheduledPendingSource(pendingQueueSource[i]))
+        {
+          dropIndex = i;
+          break;
+        }
+      }
+
+      if (dropIndex < 0)
+      {
+        Serial.printf("[Queue] Full of scheduled readings, dropping new %s ts=%u\n",
+                      pendingSourceLabel(source), (unsigned)ts);
+        return;
+      }
+    }
+
+    Serial.printf("[Queue] Full, dropping %s ts=%u to enqueue %s ts=%u\n",
+                  pendingSourceLabel(pendingQueueSource[dropIndex]),
+                  (unsigned)pendingQueue[dropIndex].timestamp,
+                  pendingSourceLabel(source),
+                  (unsigned)ts);
+    removePendingAt((uint8_t)dropIndex);
   }
+
   pendingQueue[pendingQueueLen].temperature = temp;
   pendingQueue[pendingQueueLen].timestamp = ts;
+  pendingQueueSource[pendingQueueLen] = source;
   pendingQueueLen++;
-  // Persistir na EEPROM
-  EEPROM.write(PENDING_QUEUE_ADDR, PENDING_QUEUE_MAGIC);
-  EEPROM.write(PENDING_QUEUE_ADDR + 1, pendingQueueLen);
-  for (uint8_t i = 0; i < pendingQueueLen; i++)
-  {
-    EEPROM.put(PENDING_QUEUE_ADDR + 2 + i * sizeof(PendingReading), pendingQueue[i]);
-  }
-  EEPROM.commit();
-  Serial.printf("[Queue] Enqueued ts=%u temp=%.2f (queue len=%u)\n", ts, temp, pendingQueueLen);
+  persistPendingQueue();
+  Serial.printf("[Queue] Enqueued %s ts=%u temp=%.2f (queue len=%u)\n",
+                pendingSourceLabel(source), (unsigned)ts, temp, pendingQueueLen);
 }
 
 #ifndef NATIVE_TEST
@@ -128,32 +265,37 @@ void drainPendingReadings()
   if (pendingQueueLen == 0)
     return;
 
-  // Batch all pending entries into a single Firebase JSON update
+  // PATCH directly under /datalogger to avoid replacing the entire device root.
+  // This preserves historical entries that are not in the pending queue.
   FirebaseJson drainJson;
   char drainTempPath[48];
   char drainTsPath[48];
+  uint8_t scheduledCount = 0;
 
   for (uint8_t i = 0; i < pendingQueueLen; i++)
   {
-    snprintf(drainTempPath, sizeof(drainTempPath), "/datalogger/%lu/temperature", (unsigned long)pendingQueue[i].timestamp);
-    snprintf(drainTsPath, sizeof(drainTsPath), "/datalogger/%lu/timestamp", (unsigned long)pendingQueue[i].timestamp);
+    if (isScheduledPendingSource(pendingQueueSource[i]))
+    {
+      scheduledCount++;
+    }
+    snprintf(drainTempPath, sizeof(drainTempPath), "/%lu/temperature", (unsigned long)pendingQueue[i].timestamp);
+    snprintf(drainTsPath, sizeof(drainTsPath), "/%lu/timestamp", (unsigned long)pendingQueue[i].timestamp);
     drainJson.set(drainTempPath, pendingQueue[i].temperature);
     drainJson.set(drainTsPath, (int)pendingQueue[i].timestamp);
   }
 
   uint8_t toSend = pendingQueueLen;
+  String dataloggerPath = databasePath + "/datalogger";
 
-  if (Firebase.RTDB.updateNode(&fbdo, databasePath.c_str(), &drainJson))
+  if (Firebase.RTDB.updateNode(&fbdo, dataloggerPath.c_str(), &drainJson))
   {
-    // All sent — clear queue and EEPROM
-    pendingQueueLen = 0;
-    EEPROM.write(PENDING_QUEUE_ADDR, 0x00);
-    EEPROM.commit();
-    Serial.printf("[Queue] Drained all %u pending reading(s)\n", toSend);
+    clearPendingQueueStorage();
+    Serial.printf("[Queue] Drained all %u pending reading(s) (%u scheduled priority)\n",
+                  toSend, scheduledCount);
   }
   else
   {
-    Serial.printf("[Queue] Batch drain failed: %s — will retry next cycle\n", fbdo.errorReason().c_str());
+    Serial.printf("[Queue] Batch drain failed: %s - will retry next cycle\n", fbdo.errorReason().c_str());
   }
 }
 #endif

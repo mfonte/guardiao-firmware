@@ -284,44 +284,24 @@ void getDeviceConfigurations()
   higherTemp = doc["_threshold"]["higherTemp"] | 80.0f;
   lowerTemp = doc["_threshold"]["lowerTemp"] | -80.0f;
   thresholdMode = doc["_threshold"]["thresholdMode"] | "both";
-  LOG("[CFG] thresholds=[%.1f, %.1f] mode=%s interval=%lums name=%s",
-      lowerTemp, higherTemp, thresholdMode.c_str(), timerDelay, DEVICE_NAME.c_str());
 
-  // Canonical interval source: scheduledReadings.intervalMinutes
-  // (sendIntervalMinutes legacy field discontinued per firmware-app contract v0.3)
+  // Regular send interval: independent of scheduled readings.
+  // Read from sendIntervalMinutes at config root; default to 5 min if absent/zero.
+  int sendIntervalMinutes = doc["sendIntervalMinutes"] | 0;
+  timerDelay = (sendIntervalMinutes > 0)
+    ? (unsigned long)sendIntervalMinutes * 60UL * 1000UL
+    : 300000UL;  // 5min default
+
+  // Scheduled readings: clock-aligned sends at exact user-defined times.
+  // intervalMinutes/startHour define WHEN to send — NOT the regular send interval.
+  // These are evaluated in callFirebase() against the current wall-clock time.
   scheduledIntervalMinutes = doc["scheduledReadings"]["intervalMinutes"] | 0;
   scheduledStartHour = doc["scheduledReadings"]["startHour"] | 0;
 
-  if (scheduledIntervalMinutes > 0)
-  {
-    timerDelay = (unsigned long)scheduledIntervalMinutes * 60UL * 1000UL;
-  }
-  else
-  {
-    timerDelay = 300000UL;  // 5min default
-  }
+  LOG("[CFG] thresholds=[%.1f, %.1f] mode=%s sendInterval=%lums scheduled=%dmin@h%d name=%s",
+      lowerTemp, higherTemp, thresholdMode.c_str(), timerDelay,
+      scheduledIntervalMinutes, scheduledStartHour, DEVICE_NAME.c_str());
 
-  // --- Device name sync (read /data node — small, separate from /config) ---
-  fbdo.stopWiFiClient();
-  yield();
-  delay(200);  // Let SSL teardown complete before new connection
-  String dataNodePath = databasePath + "/data";
-  if (Firebase.RTDB.getJSON(&fbdo, dataNodePath))
-  {
-    DeserializationError nameErr = deserializeJson(doc, fbdo.jsonString());
-    if (!nameErr)
-    {
-      const char* remoteName = doc["displayName"] | (const char*)nullptr;
-      if (remoteName && strlen(remoteName) > 0 && String(remoteName) != DEVICE_NAME)
-      {
-        LOG("Device name updated from app: '%s' -> '%s'", DEVICE_NAME.c_str(), remoteName);
-        DEVICE_NAME = String(remoteName);
-        if (DEVICE_NAME.length() > MAX_DISPLAY_NAME_LEN) DEVICE_NAME = DEVICE_NAME.substring(0, MAX_DISPLAY_NAME_LEN);
-        writeStringToEEPROM(DEVICE_NAME_ADDR, DEVICE_NAME);
-        EEPROM.commit();
-      }
-    }
-  }
   fbdo.stopWiFiClient();
   yield();
 }
@@ -407,9 +387,13 @@ void ISRWatchDog()
  * pushes temperature + datalogger entry to RTDB. Triggers threshold check
  * after a successful write.
  */
-bool sendDataToFireBase()
+bool sendDataToFireBase(const char *triggerTag, uint8_t pendingSource)
 {
-  sendDataPrevMillis = millis();
+  if (triggerTag == nullptr)
+    triggerTag = "UNKNOWN";
+
+  unsigned long sendStartMillis = millis();
+  sendDataPrevMillis = sendStartMillis;
   timestamp = (int)getTime();
 
   if (!sensorError && timestamp > MIN_VALID_TIMESTAMP)
@@ -418,7 +402,6 @@ bool sendDataToFireBase()
     // Write 1: current readings to /data node.
     // PATCH to databasePath + "/data" touches only that subtree — does not
     // affect /datalogger or other sibling nodes.
-    fbdo.stopWiFiClient();
     json.clear();
     json.add("temperature", temperature);
     json.add("timestamp", timestamp);
@@ -448,8 +431,8 @@ bool sendDataToFireBase()
     {
       firebaseFailCount = 0;
       firebaseSkipRemaining = 0;
-      LOG("[SEND] temp=%.1f°C ts=%lu heap=%u rssi=%d -> ok (fail=0)",
-          temperature, (unsigned long)timestamp, ESP.getFreeHeap(), WiFi.RSSI());
+      LOG("[SEND:%s] temp=%.1f°C ts=%lu heap=%u rssi=%d -> ok (fail=0)",
+          triggerTag, temperature, (unsigned long)timestamp, ESP.getFreeHeap(), WiFi.RSSI());
       blinkLed(1, 80, 0);  // 1x short blink = send ok
       drainPendingReadings();
       checkThresholdAlert();
@@ -460,9 +443,12 @@ bool sendDataToFireBase()
     {
       firebaseFailCount++;
       firebaseSkipRemaining = (uint8_t)min(1u << firebaseFailCount, 16u);
-      enqueuePendingReading(temperature, (uint32_t)timestamp);
-      LOG("[SEND] temp=%.1f°C ts=%lu heap=%u rssi=%d -> FAILED: %s (fail=%u skip=%u)",
-          temperature, (unsigned long)timestamp, ESP.getFreeHeap(), WiFi.RSSI(),
+      // Restore timer so next attempt fires after timerDelay from LAST SUCCESS,
+      // not from this failure — avoids a full extra cycle penalty on transient errors.
+      sendDataPrevMillis = sendStartMillis - timerDelay + (timerDelay / 10);
+      enqueuePendingReading(temperature, (uint32_t)timestamp, pendingSource);
+      LOG("[SEND:%s] temp=%.1f°C ts=%lu heap=%u rssi=%d -> FAILED: %s (fail=%u skip=%u)",
+          triggerTag, temperature, (unsigned long)timestamp, ESP.getFreeHeap(), WiFi.RSSI(),
           fbdo.errorReason().c_str(), firebaseFailCount, firebaseSkipRemaining);
       countDataSentToFireBase += 1;
       return false;
@@ -470,7 +456,7 @@ bool sendDataToFireBase()
   }
   else
   {
-    LOG("[SEND] skipped — sensorError=%d ts=%lu", (int)sensorError, (unsigned long)timestamp);
+    LOG("[SEND:%s] skipped — sensorError=%d ts=%lu", triggerTag, (int)sensorError, (unsigned long)timestamp);
   }
 
   countDataSentToFireBase += 1;
@@ -538,19 +524,96 @@ void callFirebase()
   // Forces an immediate reading so the backend knows the alert condition cleared.
   bool alertRecovered = (countMessageSending > 0) && (evaluateThreshold() == 0);
 
-  if (Firebase.ready() && (timerElapsed || thresholdExceeded || alertRecovered))
+  // Scheduled send: fire at exact LOCAL wall-clock slots defined by
+  // scheduledStartHour + scheduledIntervalMinutes (e.g. every 60min from
+  // 00:00 -> 00:00, 01:00, 02:00 in GMT-3). This is independent of the
+  // regular timerDelay interval.
+  bool scheduledSendDue = false;
+  unsigned long scheduledCurrentSlot = 0;
+  unsigned long scheduledNow = 0;
+  unsigned long scheduledIntervalSec = 0;
+  unsigned long scheduledNextSlot = 0;
+  if (scheduledIntervalMinutes > 0 && ntpAnchorEpoch > MIN_VALID_TIMESTAMP)
   {
-    if (thresholdExceeded && !timerElapsed)
+    unsigned long nowUtc = ntpAnchorEpoch + (millis() - ntpAnchorMillis) / 1000UL;
+    long scheduledLocalNowSigned = (long)nowUtc + (long)TIMEZONE_OFFSET_SEC;
+    if (scheduledLocalNowSigned > 0)
     {
-      LOG("[Alert] Threshold exceeded — forcing immediate Firebase send");
+      scheduledNow = (unsigned long)scheduledLocalNowSigned;
+      scheduledIntervalSec = (unsigned long)scheduledIntervalMinutes * 60UL;
+      unsigned long startOffsetSec = (unsigned long)scheduledStartHour * 3600UL;
+      // Align local time to the user-defined schedule offset.
+      unsigned long nowAdj = (scheduledNow >= startOffsetSec) ? (scheduledNow - startOffsetSec) : 0UL;
+      scheduledCurrentSlot = (nowAdj / scheduledIntervalSec) * scheduledIntervalSec + startOffsetSec;
+      if (lastScheduledSendEpoch < scheduledCurrentSlot && scheduledNow >= scheduledCurrentSlot)
+      {
+        scheduledSendDue = true;
+        scheduledNextSlot = scheduledCurrentSlot;
+      }
+      else if (scheduledNow < scheduledCurrentSlot)
+      {
+        scheduledNextSlot = scheduledCurrentSlot;
+      }
+      else
+      {
+        scheduledNextSlot = scheduledCurrentSlot + scheduledIntervalSec;
+      }
     }
-    if (alertRecovered && !timerElapsed)
-    {
-      LOG("[Alert] Threshold cleared — forcing recovery send");
-    }
-    sendDataToFireBase();
   }
-  else if (!Firebase.ready() && timerElapsed)
+
+  const char *triggerTag = nullptr;
+  uint8_t pendingSource = PENDING_SRC_UNKNOWN;
+  if (scheduledSendDue)
+  {
+    triggerTag = "SCHEDULED";
+    pendingSource = PENDING_SRC_SCHEDULED;
+  }
+  else if (thresholdExceeded)
+  {
+    triggerTag = "THRESHOLD";
+    pendingSource = PENDING_SRC_THRESHOLD;
+  }
+  else if (alertRecovered)
+  {
+    triggerTag = "RECOVERY";
+    pendingSource = PENDING_SRC_RECOVERY;
+  }
+  else if (timerElapsed)
+  {
+    triggerTag = "INTERVAL";
+    pendingSource = PENDING_SRC_INTERVAL;
+  }
+
+  static unsigned long lastHoldLogMs = 0;
+
+  if (Firebase.ready() && triggerTag != nullptr)
+  {
+    if (pendingSource == PENDING_SRC_INTERVAL)
+    {
+      unsigned long elapsedMs = (sendDataPrevMillis == 0) ? 0UL : (millis() - sendDataPrevMillis);
+      LOG("[INTERVAL] Regular send due after %lus (every %lu min)",
+          elapsedMs / 1000UL, timerDelay / 60000UL);
+    }
+    if (pendingSource == PENDING_SRC_THRESHOLD)
+    {
+      LOG("[THRESHOLD] Limit exceeded -- forcing immediate send");
+    }
+    if (pendingSource == PENDING_SRC_RECOVERY)
+    {
+      LOG("[RECOVERY] Temperature back within limits -- forcing recovery send");
+    }
+    if (pendingSource == PENDING_SRC_SCHEDULED)
+    {
+      unsigned long slotSecondsOfDay = scheduledCurrentSlot % 86400UL;
+      unsigned long slotHour = slotSecondsOfDay / 3600UL;
+      unsigned long slotMinute = (slotSecondsOfDay % 3600UL) / 60UL;
+      LOG("[SCHEDULED] Programmed measurement slot %02lu:%02lu reached (every %d min, start %02d:00)",
+          slotHour, slotMinute, scheduledIntervalMinutes, scheduledStartHour);
+      lastScheduledSendEpoch = scheduledCurrentSlot;
+    }
+    sendDataToFireBase(triggerTag, pendingSource);
+  }
+  else if (!Firebase.ready() && triggerTag != nullptr)
   {
     LOG("[WiFi] Firebase not ready. Attempting WiFi reconnect...");
     bool reconnected = false;
@@ -576,6 +639,43 @@ void callFirebase()
       ESP.reset();
     }
     // Firebase reconecta automaticamente na proxima chamada apos WiFi recovery.
+  }
+  else
+  {
+    if (millis() - lastHoldLogMs > 60000UL)
+    {
+      unsigned long elapsedMs = (sendDataPrevMillis == 0) ? 0UL : (millis() - sendDataPrevMillis);
+      unsigned long remainingMs = (timerElapsed || sendDataPrevMillis == 0)
+                                     ? 0UL
+                                     : (timerDelay - elapsedMs);
+      LOG("[INTERVAL-HOLD] ready=%d due=%d remain=%lus temp=%.1f lim=[%.1f,%.1f] mode=%s alertCount=%d",
+          Firebase.ready() ? 1 : 0,
+          timerElapsed ? 1 : 0,
+          remainingMs / 1000UL,
+          temperature,
+          lowerTemp,
+          higherTemp,
+          thresholdMode.c_str(),
+          countMessageSending);
+
+      if (scheduledIntervalSec > 0 && scheduledNextSlot > 0)
+      {
+        unsigned long scheduledRemainSec = (scheduledNextSlot > scheduledNow)
+                                             ? (scheduledNextSlot - scheduledNow)
+                                             : 0UL;
+        unsigned long nextSecondsOfDay = scheduledNextSlot % 86400UL;
+        unsigned long nextHour = nextSecondsOfDay / 3600UL;
+        unsigned long nextMinute = (nextSecondsOfDay % 3600UL) / 60UL;
+        LOG("[SCHEDULED-HOLD] next=%02lu:%02lu in=%lus interval=%dmin start=%02d:00",
+            nextHour,
+            nextMinute,
+            scheduledRemainSec,
+            scheduledIntervalMinutes,
+            scheduledStartHour);
+      }
+
+      lastHoldLogMs = millis();
+    }
   }
 
 }
