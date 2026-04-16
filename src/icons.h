@@ -1,0 +1,52 @@
+#pragma once
+#include <Arduino.h>
+
+// 8x8 XBM icons (PROGMEM) for status bar and UI elements
+// XBM format: bit 0 (LSB) = leftmost pixel, row-major order
+
+static const uint8_t ICON_SIZE = 8;
+
+// WiFi signal: concentric arcs with dot
+static const uint8_t icon_wifi[] PROGMEM = {
+    0x00, 0x3C, 0x42, 0x18, 0x24, 0x00, 0x18, 0x00};
+
+// WiFi disconnected: X mark
+static const uint8_t icon_wifi_off[] PROGMEM = {
+    0x00, 0x42, 0x24, 0x18, 0x18, 0x24, 0x42, 0x00};
+
+// Sync OK: upward arrow
+static const uint8_t icon_sync_ok[] PROGMEM = {
+    0x08, 0x1C, 0x2A, 0x08, 0x08, 0x08, 0x08, 0x00};
+
+// Sync error: exclamation
+static const uint8_t icon_sync_err[] PROGMEM = {
+    0x18, 0x18, 0x18, 0x18, 0x18, 0x00, 0x18, 0x00};
+
+// Bell: alarm active
+static const uint8_t icon_bell[] PROGMEM = {
+    0x08, 0x1C, 0x1C, 0x3E, 0x3E, 0x7F, 0x00, 0x08};
+
+// Trend arrow up
+static const uint8_t icon_arrow_up[] PROGMEM = {
+    0x08, 0x1C, 0x3E, 0x08, 0x08, 0x08, 0x08, 0x00};
+
+// Trend arrow down
+static const uint8_t icon_arrow_down[] PROGMEM = {
+    0x00, 0x08, 0x08, 0x08, 0x08, 0x3E, 0x1C, 0x08};
+
+// Trend stable: right arrow
+static const uint8_t icon_arrow_right[] PROGMEM = {
+    0x00, 0x08, 0x10, 0x3F, 0x3F, 0x10, 0x08, 0x00};
+
+// Navigation hint: left arrow
+static const uint8_t icon_arrow_left[] PROGMEM = {
+    0x00, 0x10, 0x08, 0xFC, 0xFC, 0x08, 0x10, 0x00};
+
+// Battery: outer shell with terminal nub
+// Battery horizontal: 6px body + 2px nub on right, filled=OK / sliver=low
+static const uint8_t icon_battery[] PROGMEM = {
+    0x00, 0x3F, 0x6F, 0x6F, 0x6F, 0x3F, 0x00, 0x00};
+
+// Battery low horizontal: shell only + 1px fill on left
+static const uint8_t icon_battery_low[] PROGMEM = {
+    0x00, 0x3F, 0x61, 0x61, 0x61, 0x3F, 0x00, 0x00};

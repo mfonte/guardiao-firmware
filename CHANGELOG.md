@@ -1,26 +1,59 @@
 # Changelog — guardiao-firmware
 
-Todas as mudanças notáveis deste projeto serão documentadas aqui.
-Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.0.0/).
-Versionamento seguindo [Semantic Versioning](https://semver.org/lang/pt-BR/).
+All notable changes to this project will be documented here.
+Format based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
+Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [Unreleased]
+## [1.2.0] - 2026-04-16
 
-### Planejado
-- Leitura do sensor DS18B20 via OneWire
-- Envio de dados via HTTP para Firebase Realtime DB
-- Reconexão automática Wi-Fi
-- Buzzer local para alertas
-
----
-
-<!-- Exemplo de release:
-## [0.1.0] - YYYY-MM-DD
+### Fixed
+- RTDB temperature history wiped on restart — datalogger now written to
+  its own timestamped path (`/datalogger/{ts}`) instead of nested inside
+  the device root PATCH, preventing Firebase from replacing the entire
+  `/datalogger` node on each send (fixes #10)
+- Alert recovery: temperature returning to safe range after a HIGH/LOW
+  alert now triggers an immediate Firebase send instead of waiting the
+  full 5-minute interval
+- `getDeviceConfigurations()` no longer calls `ESP.restart()` when
+  Firebase is transiently not ready — retries silently on next cycle
 
 ### Added
-- Leitura de temperatura DS18B20 (#1)
-- Envio HTTP para Firebase (#2)
-- Reconexão Wi-Fi automática (#3)
--->
+- WiFi credential ring buffer: stores last 3 networks in EEPROM
+  (addr 510), auto-reconnects on boot, promotes successful network to
+  slot 0 (SSID max 32 chars, password max 64 chars)
+- Clock frame interpolates seconds via `millis()` delta from last NTP
+  sync — clock ticks every second without blocking Firebase calls
+- LED feedback: 1 blink on successful send, 3 blinks on alarm
+
+### Changed
+- `sendIntervalMinutes` deprecated — `scheduledReadings.intervalMinutes`
+  is now the single source of truth for the send interval
+- Structured log format: `[BOOT]`, `[SEND]`, `[ALERT]`, `[HB]`, `[CFG]`
+  with real BRT timestamp when NTP is synced, uptime fallback otherwise
+
+---
+
+## [1.1.0] - 2026-04-14 (Production Hardening)
+
+### Fixed
+- ISR watchdog (`ISRWatchDog`) no longer calls `Serial` — only sets flag
+- WiFi reconnection attempted before `ESP.reset()` in `callFirebase()`
+- Firebase auth retry with max attempts and OLED error screen on failure
+
+### Added
+- Exponential backoff on Firebase failure (min 3 retries before reset)
+- EEPROM pending queue: stores up to 16 readings offline, drained on
+  next successful Firebase connection
+- Separate config-fetch interval (60 min) from data-send interval
+- `drawWifiReconnecting()` modal on WiFi disconnection in `loop()`
+- `drawBootError()` shown on all critical boot failures
+- Module decomposition: `drawOled.h` split into `alarm.h`, `buttons.h`,
+  `buzzer.h`, `drawOled.h` (rendering only)
+- `bool sensorError` flag replaces magic float sentinels (-127, 85)
+- `snprintf` + `char[]` replaces `String` in all Firebase hot-paths
+- PlatformIO native test environment with Unity — 19 unit tests
+
+---
+

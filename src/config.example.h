@@ -1,88 +1,111 @@
-// Modelo de configuração local do firmware.
-// Copie para `src/config.h` e preencha com os valores reais do ambiente.
+#pragma once
 
-// Define the maximum sizes for the email and password data.
-const int EMAIL_ADDR = 0;         // Initial address for the email
-const int PASS_ADDR = 100;        // Initial address for the password
-const int DEVICE_NAME_ADDR = 200; // Initial address for the device name
-const int LDID_ADDR = 300;        // Initial address for LDID (Logical Device ID)
-const int LDID_SIZE = 64;         // Max LDID size
+// ---- Timestamped log macro ----
+// Shows real local time (BRT GMT-3) when NTP is synced, uptime [MM:SS.cc] otherwise.
+#ifndef NATIVE_TEST
+#define LOG(fmt, ...) do { \
+  if (ntpAnchorEpoch > 0) { \
+    unsigned long _epoch = ntpAnchorEpoch + (millis() - ntpAnchorMillis) / 1000UL \
+                           + (unsigned long)(TIMEZONE_OFFSET_SEC + 86400L); \
+    time_t _t = (time_t)_epoch; \
+    struct tm *_ti = gmtime(&_t); \
+    Serial.printf("[%02d:%02d:%02d] " fmt "\n", \
+      _ti->tm_hour, _ti->tm_min, _ti->tm_sec, ##__VA_ARGS__); \
+  } else { \
+    unsigned long _ms = millis(); \
+    Serial.printf("[%02lu:%02lu.%02lu] " fmt "\n", \
+      (_ms / 60000UL) % 100, (_ms / 1000UL) % 60, (_ms / 10UL) % 100, ##__VA_ARGS__); \
+  } \
+} while(0)
+#else
+#define LOG(fmt, ...) do { printf("[TEST] " fmt "\n", ##__VA_ARGS__); } while(0)
+#endif
+// Local firmware configuration template.
+// Copy to `src/config.h` and fill in with real environment values.
 
-String DEVICE_UUID;
-String DEVICE_NAME;
-String DEVICE_LDID; // Logical Device ID (persistent, immutable)
-String USER_EMAIL;
-String USER_PASSWORD;
-String newEmail;
+// EEPROM address map for per-device persistent data
+const int EMAIL_ADDR      = 0;   // Email string start address
+const int PASS_ADDR       = 100; // Password string start address
+const int DEVICE_NAME_ADDR = 200;
+const int MAX_DISPLAY_NAME_LEN = 20;  // OLED SSD1306 + app UI hard limit // Device name string start address
+const int LDID_ADDR       = 300; // Logical Device ID string start address
+
+// ---- Runtime state (populated at boot from EEPROM / WiFi / Firebase) ----
+String DEVICE_UUID;   // ESP chip ID (unique per board)
+String DEVICE_NAME;   // Human-readable device name (stored in EEPROM)
+String DEVICE_LDID;   // Logical Device ID — immutable once generated
+String USER_EMAIL;    // Firebase auth email (stored in EEPROM)
+String USER_PASSWORD; // Firebase auth password (stored in EEPROM)
+String newEmail;      // Staging variable used by WiFiManager save callback
 String newPassword;
 String newDeviceName;
-String WIFI_SSID;
-String STA_NAME;
-String HOST_NAME; // OTA Configuration and Wi-Fi Ap STA
+String WIFI_SSID;     // Connected SSID (filled after WiFi connects)
+String STA_NAME;      // Hostname / STA label used during portal setup
+String HOST_NAME;     // OTA hostname ("guardiao-<chipId>")
 
-// Firmware version
-#define FIRMWARE_VERSION "0.1.0"
-#define HEARTBEAT_INTERVAL 300000L // 5 minutes
+// ---- Firmware metadata ----
+#define FIRMWARE_VERSION    "1.2.0"
+#define HEARTBEAT_INTERVAL  300000L  // Heartbeat interval: 5 minutes (ms)
 
-// Firebase RTDB configuration
-#define API_KEY "SUA_FIREBASE_API_KEY"
-#define DATABASE_URL "https://seu-projeto-default-rtdb.firebaseio.com/"
+// ---- Firebase RTDB credentials (replace with real values in config.h) ----
+#define API_KEY      "YOUR_FIREBASE_API_KEY"
+#define DATABASE_URL "https://your-project-default-rtdb.firebaseio.com/"
 
-// Board configuration
-#define SDA D2                    // Display SDA pin
-#define SCL D1                    // Display SCL pin
-#define ONE_WIRE_BUS D5           // DS18B20 data wire
-#define BUZZER_PIN D6             // Buzzer passivo — GPIO12, suporta PWM, sem restrição de boot
-#define BUTTON_S1_PIN D8          // D8 => S1 On TagsApp Board - V2.0
-#define BUTTON_S2_PIN D7          // D7 => S2 On TagsApp Board - V2.0
-#define GET_DATA_INTERVAL 5000L   // Leitura local a cada 5 segundos
-#define BUTTON_S1_HOLD_TIME 5000  // Segurar S1 por 5s abre Captive Portal
-#define BUTTON_S2_HOLD_TIME 10000 // Segurar S2 por 10s reseta o device
-#define ALARM_MESSAGE "ALARM ON"
-#define ADC_MODE(ADC_VCC)
-#define DEBUG_CODE 1 // Enable (1)/Disable (0) serial debug
+// ---- Hardware pin assignments ----
+#define SDA            D2  // OLED SDA
+#define SCL            D1  // OLED SCL
+#define ONE_WIRE_BUS   D5  // DS18B20 data wire
+#define BUZZER_PIN     D6  // Passive buzzer (GPIO12, PWM-capable, no boot restriction)
+#define BUTTON_S1_PIN  D8  // S1: short = prev frame, hold 5s = WiFi portal
+#define BUTTON_S2_PIN  D7  // S2: short = next frame, hold 10s = factory reset
 
-// Firebase RTDB — paths relativos à raiz do device node
-String deviceUUIDPath = "/deviceUUID"; // raiz do device (não sob config/)
-String deviceNamePath = "/data/deviceName";
-String tempPath = "/data/temperature";
-String timestampPath = "/data/timestamp";
-String statusPath = "/data/deviceStatus";
-String dataloggerTempPath = "/temperature";
+// ---- Timing constants ----
+#define GET_DATA_INTERVAL   5000L   // Local sensor read period (ms)
+#define BUTTON_S1_HOLD_TIME 5000    // S1 hold duration to open captive portal (ms)
+#define BUTTON_S2_HOLD_TIME 10000   // S2 hold duration to factory-reset (ms)
+
+// ---- Alarm ----
+#define ALARM_MESSAGE "ALARM ON"  // Text shown on OLED during alarm
+
+// ---- Misc ----
+#define TIMEZONE_OFFSET_SEC  -10800L  // UTC offset in seconds (e.g. -3h = -10800 for BRT)
+#define MIN_VALID_TIMESTAMP 1704067200L  // 2024-01-01 00:00:00 UTC — NTP sanity floor
+
+// ---- Firebase RTDB path fragments (relative to the device node root) ----
+String deviceUUIDPath          = "/deviceUUID";
+String deviceNamePath          = "/data/displayName";
+String tempPath                = "/data/temperature";
+String timestampPath           = "/data/timestamp";
+String statusPath              = "/data/deviceStatus";
+String dataloggerTempPath      = "/temperature";
 String dataloggerTimestampPath = "/timestamp";
-String configPath = "/config";
-String thresholdPath = "/_threshold";
-String alertPath = "/_alert";
+String configPath              = "/config";
 
-// Variáveis de threshold (lidas do Firebase)
-float higherTemp = 80.0;
-float lowerTemp = -80.0;
-String thresholdMode = "both"; // "both" | "above" | "below" | "none"
+// ---- Threshold runtime variables (overwritten by Firebase on each sync) ----
+float  higherTemp    = 80.0;
+float  lowerTemp     = -80.0;
+// thresholdMode values: "both" | "upperOnly" | "lowerOnly" | "none"
+String thresholdMode = "both";
 
-// Variáveis de medições programadas (lidas do Firebase)
-bool scheduledReadingsEnabled = false;
-int scheduledIntervalMinutes = 5; // padrão: 5 minutos
-int scheduledStartHour = 0;
+// ---- Scheduled readings (overwritten by Firebase on each sync) ----
+// intervalMinutes == 0 means "not configured — use default 5 min"
+int scheduledIntervalMinutes = 0;
+int scheduledStartHour       = 0;
 
-// Variável de tempo para envio ao Firebase (em ms, atualizada dinamicamente)
-unsigned long timerDelay = 300000L; // padrão: 5 minutos
+// ---- Firebase send interval (ms, updated dynamically from remote config) ----
+unsigned long timerDelay = 300000L;  // default 5 minutes
 
-// Variável para guardar o epoch time atual
-int timestamp = 0;
-int watchDogCount = 0;
+// ---- Runtime counters / state ----
+unsigned long timestamp            = 0;   // Current epoch time from NTP
+int           watchDogCount        = 0;
+int           countMessageSending  = 0;
+int           countDataSentToFireBase = 0;
 
-int countMessageSending = 0;
-int countDataSentToFireBase = 0;
-
-// Timer variables
-unsigned long sendDataPrevMillis = 0;
+// ---- Timer bookkeeping ----
+unsigned long sendDataPrevMillis  = 0;
 unsigned long lastHeartbeatMillis = 0;
-unsigned long buttonS1PressedTime = 0;
-unsigned long buttonS2PressedTime = 0;
-uint8_t resetReason = 1; // 1=power, 2=watchdog, 3=OTA, 4=manual
+uint8_t       resetReason         = 1;  // 1=power, 2=watchdog, 3=OTA, 4=manual
 
-// Sensor
-float temperature = -127.0;
-float higherTempRead = 80.0;
-float lowerTempRead = -80.0;
-uint32_t BATTERY_LEVEL;
+// ---- Sensor / ADC ----
+float    temperature  = -127.0;  // Last DS18B20 reading (888.0 = sensor error)
+uint32_t BATTERY_LEVEL = 0;      // Raw VCC reading from ESP.getVcc() (mV * 1000)

@@ -1,76 +1,79 @@
 # guardiao-firmware
 
-Firmware embarcado para os dispositivos da plataforma **Guardião IoT**. Responsável pela leitura de sensores, acionamento de atuadores locais e comunicação com o Firebase Realtime Database.
+Embedded firmware for the **Guardião IoT** platform devices. Responsible for reading sensors, triggering local actuators, and communicating with Firebase Realtime Database.
 
 ---
 
-## Hardware Suportado
+## Supported Hardware
 
-| Versão | MCU               | Sensores         | Comunicação     |
-| ------ | ----------------- | ---------------- | --------------- |
-| A      | ESP-12E           | DS18B20 (temp)   | Wi-Fi HTTP      |
-| B      | ESP32-S/S3        | DS18B20 + extras | Wi-Fi HTTP/MQTT |
-| C      | ESP32-S/S3 + LoRa | DS18B20 + extras | Wi-Fi + LoRa    |
-
----
-
-## Pré-requisitos
-
-- [PlatformIO](https://platformio.org/) ou Arduino IDE 2.x
-- Python 3.8+ (para PlatformIO)
-- Biblioteca `Firebase ESP Client` ou `FirebaseESP8266`
-- Biblioteca `DallasTemperature` + `OneWire`
+| Version | MCU               | Sensors          | Communication    |
+| ------- | ----------------- | ---------------- | ---------------- |
+| A       | ESP-12E           | DS18B20 (temp)   | Wi-Fi HTTP       |
+| B       | ESP32-S/S3        | DS18B20 + extras | Wi-Fi HTTP/MQTT  |
+| C       | ESP32-S/S3 + LoRa | DS18B20 + extras | Wi-Fi + LoRa     |
 
 ---
 
-## Configuração
+## Prerequisites
 
-1. Clone o repositório:
+- [PlatformIO](https://platformio.org/) or Arduino IDE 2.x
+- Python 3.8+ (for PlatformIO)
+- `Firebase ESP Client` or `FirebaseESP8266` library
+- `DallasTemperature` + `OneWire` libraries
+
+---
+
+## Setup
+
+1. Clone the repository:
 
 ```bash
-git clone https://github.com/seu-usuario/guardiao-firmware.git
+git clone https://github.com/mfonte/guardiao-firmware.git
 cd guardiao-firmware
 ```
 
-2. Copie o arquivo de configuração:
+2. Copy the configuration template:
 
 ```bash
 cp src/config.example.h src/config.h
 ```
 
-3. Edite `src/config.h` com suas credenciais e parâmetros locais:
+3. Edit `src/config.h` with your credentials and local parameters:
 
 ```cpp
-#define API_KEY "SUA_FIREBASE_API_KEY"
-#define DATABASE_URL "https://seu-projeto-default-rtdb.firebaseio.com/"
+#define API_KEY "YOUR_FIREBASE_API_KEY"
+#define DATABASE_URL "https://your-project-default-rtdb.firebaseio.com/"
 ```
 
-> `src/config.h` é local ao ambiente e não deve ser commitado.
+> `src/config.h` is local to your environment and must not be committed.
 
-4. Compile e faça upload:
+4. Build and upload:
 
 ```bash
 # PlatformIO
 pio run --target upload
 
 # Arduino IDE
-# Selecione a placa correta e faça upload normalmente
+# Select the correct board and upload normally
 ```
 
 ---
 
-## Estrutura do Projeto
+## Project Structure
 
 ```
 guardiao-firmware/
     ├── src/
-    │   ├── main.cpp          # Código principal
-    │   ├── config.example.h  # Template de configuração
-    │   └── config.h          # Configuração local (ignorada pelo git)
-    ├── lib/                  # Bibliotecas locais
+    │   ├── main.cpp          # Main application code
+    │   ├── drawOled.h        # OLED display rendering functions
+    │   ├── EEPROMFunction.h  # EEPROM read/write helpers
+    │   ├── OTAUpdate.h       # OTA update setup
+    │   ├── config.example.h  # Configuration template
+    │   └── config.h          # Local configuration (git-ignored)
+    ├── lib/                  # Local libraries
     ├── include/
     │   └── README
-    ├── platformio.ini        # Configuração PlatformIO
+    ├── platformio.ini        # PlatformIO configuration
     ├── .gitignore
     ├── CHANGELOG.md
     └── README.md
@@ -78,40 +81,37 @@ guardiao-firmware/
 
 ---
 
-## Fluxo de Dados
+## Data Flow
 
 ```
 DS18B20 → ESP → Firebase Realtime DB → App / Web
 ```
 
-- Leitura a cada 30 segundos (configurável)
-- Payload JSON: `{ "temperatura": 25.4, "timestamp": 1234567890, "device_id": "abc123" }`
+- Configurable reading interval (default: 5 minutes, adjustable via app)
+- JSON payload: `{ "temperature": 25.4, "timestamp": 1234567890, "deviceName": "my-sensor" }`
+- Protocol v2: LDID-based device identity, boot messages, periodic heartbeats
+
+> **Wi-Fi credential limits:** The device stores up to **3 networks** in EEPROM. SSID max **32 characters**, password max **64 characters**. Values exceeding these limits are silently truncated.
 
 ---
 
-## Desenvolvimento
+## Development
 
-Siga o fluxo definido em [`../DEVELOPMENT.md`](../DEVELOPMENT.md).
+Follow the workflow defined in [`../DEVELOPMENT.md`](../DEVELOPMENT.md).
 
 ```bash
-# Instalar GSD
-npx get-shit-done-cc --claude --local
-
-# Instalar SDD
-npx cc-sdd@latest --claude --lang pt
-
-# Iniciar Claude Code
+# Start Claude Code
 claude
 ```
 
 ---
 
-## Versão Atual
+## Current Version
 
-Veja [CHANGELOG.md](CHANGELOG.md) para histórico de versões.
+See [CHANGELOG.md](CHANGELOG.md) for version history.
 
 ---
 
-## Licença
+## License
 
 Proprietary — Guardião IoT Platform
