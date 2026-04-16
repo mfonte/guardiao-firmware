@@ -44,7 +44,7 @@ String STA_NAME;      // Hostname / STA label used during portal setup
 String HOST_NAME;     // OTA hostname ("guardiao-<chipId>")
 
 // ---- Firmware metadata ----
-#define FIRMWARE_VERSION    "1.2.0"
+#define FIRMWARE_VERSION    "1.2.1"
 #define HEARTBEAT_INTERVAL  300000L  // Heartbeat interval: 5 minutes (ms)
 
 // ---- Firebase RTDB credentials (replace with real values in config.h) ----
@@ -94,6 +94,11 @@ int scheduledStartHour       = 0;
 
 // ---- Firebase send interval (ms, updated dynamically from remote config) ----
 unsigned long timerDelay = 300000L;  // default 5 minutes
+
+// ---- Scheduled readings tracking ----
+// Epoch of the last wall-clock slot that was dispatched as a scheduled send.
+// Compared against the current aligned slot to trigger clock-exact sends.
+unsigned long lastScheduledSendEpoch = 0;
 
 // ---- Runtime counters / state ----
 unsigned long timestamp            = 0;   // Current epoch time from NTP

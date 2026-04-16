@@ -6,6 +6,24 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.2.1] - 2026-04-16
+
+### Added
+- Distinct send trigger logs: `INTERVAL`, `SCHEDULED`, `THRESHOLD`, `RECOVERY`
+- Hold-state logs split into `INTERVAL-HOLD` and `SCHEDULED-HOLD`
+- Pending EEPROM queue source tags (`interval`, `scheduled`, `threshold`, `recovery`)
+- Priority retention for scheduled readings when queue is full
+
+### Fixed
+- Scheduled readings now use local timezone (`TIMEZONE_OFFSET_SEC`) for slot alignment
+- `scheduledReadings.intervalMinutes/startHour` no longer throttle regular interval sends
+- Schedule and interval flows now operate independently with clear telemetry traces
+
+### Changed
+- Firmware emits trigger-aware send labels (`[SEND:<origin>]`) to simplify app-side reconciliation
+
+---
+
 ## [1.2.0] - 2026-04-16
 
 ### Fixed
