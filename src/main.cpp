@@ -313,11 +313,15 @@ void sendDataToFireBase()
     json.set(tempPath.c_str(),        temperature);          // float, não String
     json.set(timestampPath.c_str(),   timestamp);            // int, não String
     json.set(statusPath.c_str(),      String("online"));
-    // Datalogger: temperatura (float) e timestamp (int)
-    json.set(("/datalogger/" + String(timestamp) + dataloggerTempPath).c_str(),      temperature);
-    json.set(("/datalogger/" + String(timestamp) + dataloggerTimestampPath).c_str(), timestamp);
     Serial.printf("Set json... %s\n", Firebase.RTDB.updateNode(&fbdo, databasePath.c_str(), &json) ? "ok" : fbdo.errorReason().c_str());
     json.clear();
+
+    // Datalogger: grava cada leitura em um nó próprio para preservar histórico
+    FirebaseJson dataloggerJson;
+    dataloggerJson.set(dataloggerTempPath.c_str(), temperature);
+    dataloggerJson.set(dataloggerTimestampPath.c_str(), timestamp);
+    String dataloggerPath = databasePath + "/datalogger/" + String(timestamp);
+    Serial.printf("Set datalogger... %s\n", Firebase.RTDB.updateNode(&fbdo, dataloggerPath.c_str(), &dataloggerJson) ? "ok" : fbdo.errorReason().c_str());
 
     checkThresholdAlert();
   }
