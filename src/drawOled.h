@@ -22,6 +22,9 @@ OLEDDisplayUi ui(&display);
 
 float prevTemperature = 0.0;
 bool  prevSensorError = true;
+// NTP anchor — written by getTime(), read by frameClock() for live seconds
+unsigned long ntpAnchorEpoch  = 0;
+unsigned long ntpAnchorMillis = 0;
 unsigned long lastVccMs = 0;
 bool firebaseConnected = false;
 
@@ -190,7 +193,11 @@ void frameBattery(OLEDDisplay *d, OLEDDisplayUiState *state, int16_t x, int16_t 
 /** Frame N: Clock — HH:MM:SS + date from NTP. */
 void frameClock(OLEDDisplay *d, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
-  unsigned long epoch = timestamp;
+  // Interpolate current time from last NTP sync using millis() delta.
+  // This keeps the clock ticking every second without blocking Firebase calls.
+  unsigned long epoch = (ntpAnchorEpoch > 0)
+    ? ntpAnchorEpoch + (millis() - ntpAnchorMillis) / 1000UL
+    : (unsigned long)timestamp;
   if (epoch <= MIN_VALID_TIMESTAMP)
   {
     d->setTextAlignment(TEXT_ALIGN_CENTER);
