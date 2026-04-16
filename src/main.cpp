@@ -415,25 +415,34 @@ bool sendDataToFireBase()
   if (!sensorError && timestamp > MIN_VALID_TIMESTAMP)
   {
 
+    // Write 1: current readings to /data node.
+    // PATCH to databasePath + "/data" touches only that subtree — does not
+    // affect /datalogger or other sibling nodes.
     fbdo.stopWiFiClient();
     json.clear();
-    // Use json.add (flat keys) instead of json.set (nested) so Firebase PATCH
-    // does multi-path update — preserves other /data fields like displayName.
-    json.add(tempPath, temperature);
-    json.add(timestampPath, timestamp);
-    json.add(statusPath, String("online"));
-    // Datalogger: temperature (float) and timestamp (int)
-    char dlTempPath[40];
-    char dlTsPath[40];
-    snprintf(dlTempPath, sizeof(dlTempPath), "/datalogger/%lu/temperature", (unsigned long)timestamp);
-    snprintf(dlTsPath, sizeof(dlTsPath), "/datalogger/%lu/timestamp", (unsigned long)timestamp);
-    json.add(String(dlTempPath), temperature);
-    json.add(String(dlTsPath), (int)timestamp);
-
-    bool writeOk = Firebase.RTDB.updateNode(&fbdo, databasePath.c_str(), &json);
+    json.add("temperature", temperature);
+    json.add("timestamp", timestamp);
+    json.add("deviceStatus", String("online"));
+    String dataNodePath = databasePath + "/data";
+    bool writeOk = Firebase.RTDB.updateNode(&fbdo, dataNodePath.c_str(), &json);
     json.clear();
     fbdo.stopWiFiClient();
     yield();
+
+    if (writeOk)
+    {
+      // Write 2: datalogger entry at its own timestamped path.
+      // PATCH to databasePath + "/datalogger/{ts}" only touches that one entry
+      // and preserves every previous timestamp — fixes history wipe on restart.
+      char dlPath[96];
+      snprintf(dlPath, sizeof(dlPath), "%s/datalogger/%lu", databasePath.c_str(), (unsigned long)timestamp);
+      json.add("temperature", temperature);
+      json.add("timestamp", (int)timestamp);
+      Firebase.RTDB.updateNode(&fbdo, dlPath, &json);
+      json.clear();
+      fbdo.stopWiFiClient();
+      yield();
+    }
 
     if (writeOk)
     {
